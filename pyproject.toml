@@ -23,10 +23,16 @@ classifiers = [
 ]
 
 # Single, deliberate dependency, kept minimal so the client embeds anywhere without a
-# resolution conflict. Do not add to this without a strong reason. Floor set to 3.13.4
-# (not just an arbitrary bump): it closes a run of aiohttp CVEs (request-smuggling-adjacent
-# header injection, decompression and body-size denial of service) fixed across 3.13.3/3.13.4.
-dependencies = ["aiohttp>=3.13.4"]
+# resolution conflict. Do not add to this without a strong reason.
+#
+# Floor deliberately low, not a recent one: Home Assistant pins its own aiohttp version
+# exactly (e.g. aiohttp==3.13.3 as of homeassistant 2026.2.3), so any floor above whatever
+# HA currently ships makes this library uninstallable alongside it. A run of aiohttp CVEs
+# fixed in 3.13.3/3.13.4 (request-smuggling-adjacent header injection, decompression and
+# body-size denial of service) was briefly used to justify raising this floor to 3.13.4;
+# none of them apply here, since they are all `aiohttp.web` (server-side) issues and this
+# client never runs a production server, only a local one in its own test suite.
+dependencies = ["aiohttp>=3.9"]
 
 [project.optional-dependencies]
 # HTTP tests use aiohttp's built-in test server rather than a mocking library: the real

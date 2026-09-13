@@ -3,6 +3,16 @@
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and semantic
 versioning.
 
+## [0.1.1] - 2026-09-13
+
+### Fixed
+
+- The `aiohttp` floor (`>=3.13.4`) made this library impossible to install alongside Home
+  Assistant, which pins its own `aiohttp` version exactly (`==3.13.3` as of homeassistant
+  2026.2.3): no version could satisfy both at once. Lowered back to `>=3.9`. The CVEs that
+  motivated the higher floor are all `aiohttp.web` (server-side) issues; this client never
+  runs a production server.
+
 ## [0.1.0] - 2026-09-13
 
 First public release.
