@@ -3,7 +3,7 @@
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and semantic
 versioning.
 
-## [0.1.0] - not yet published
+## [0.1.0] - 2026-09-13
 
 First public release.
 
