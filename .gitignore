@@ -1,0 +1,23 @@
+# Environments and build
+.venv/
+venv/
+dist/
+build/
+*.egg-info/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Secrets: never commit credentials, alarm codes or persisted tokens
+.env
+secrets.*
+*.credentials
+credentials.json
+# Note: do not use a broad "credentials*" rule. It would also exclude source modules
+# named credentials.py, which silently drops them from the built package.
+*.token
+.daitem.token

@@ -1,0 +1,75 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pydaitem"
+dynamic = ["version"]
+description = "Unofficial async client for the Daitem Secure API (Atral Topaze platform)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Yannick Olympio" }]
+keywords = ["daitem", "atral", "topaze", "alarm", "home-assistant", "home-automation"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Framework :: AsyncIO",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Home Automation",
+]
+
+# Single, deliberate dependency, kept minimal so the client embeds anywhere without a
+# resolution conflict. Do not add to this without a strong reason. Floor set to 3.13.4
+# (not just an arbitrary bump): it closes a run of aiohttp CVEs (request-smuggling-adjacent
+# header injection, decompression and body-size denial of service) fixed across 3.13.3/3.13.4.
+dependencies = ["aiohttp>=3.13.4"]
+
+[project.optional-dependencies]
+# HTTP tests use aiohttp's built-in test server rather than a mocking library: the real
+# network stack is exercised and a fragile dependency is avoided (aioresponses 0.7.9 is
+# incompatible with aiohttp 3.14).
+dev = [
+  "pytest>=8.0",
+  "pytest-asyncio>=0.24",
+  "ruff>=0.6",
+  "mypy>=1.11",
+]
+
+# Command line entry point. Deliberately built on argparse: the single-dependency
+# promise keeps this library conflict-free to embed anywhere, and a CLI convenience
+# must not cost users that.
+[project.scripts]
+pydaitem = "pydaitem.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/tomahoax/pydaitem"
+Issues = "https://github.com/tomahoax/pydaitem/issues"
+
+# The version lives in the module, not here, so the two can never disagree.
+[tool.hatch.version]
+path = "src/pydaitem/const/__init__.py"
+pattern = 'VERSION: Final = "(?P<version>[^"]+)"'
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pydaitem"]
+# Ships py.typed so consumers actually see the annotations (PEP 561).
+artifacts = ["src/pydaitem/py.typed"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
