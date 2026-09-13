@@ -3,6 +3,13 @@
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and semantic
 versioning.
 
+## [Unreleased]
+
+### Added
+
+- Python 3.14 is now tested in CI and declared in the package metadata. The supported floor
+  stays at 3.11.
+
 ## [0.1.1] - 2026-09-13
 
 ### Fixed
