@@ -30,6 +30,7 @@ from .exceptions import (
 from .models import (
     Anomalies,
     Device,
+    Firmware,
     Group,
     Inventory,
     Schedule,
@@ -62,6 +63,7 @@ __all__ = [
     "Device",
     "Fault",
     "FileTokenStore",
+    "Firmware",
     "Group",
     "Inventory",
     "MemoryTokenStore",

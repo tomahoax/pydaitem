@@ -43,7 +43,7 @@ def _dependency_version(package: str) -> str:
 
 #: Single source of truth for the version: pyproject reads it from here, so the packaged
 #: metadata and the value sent as X-App-Version can never drift apart.
-VERSION: Final = "0.1.1"
+VERSION: Final = "0.2.0"
 PROJECT_URL: Final = "https://github.com/tomahoax/pydaitem"
 
 #: Required on every call, and the value must be `eNova`: without it the Azure gateway

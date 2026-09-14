@@ -1,4 +1,4 @@
-"""Device inventory: `Anomalies`, `Device`, `Inventory`."""
+"""Device inventory: `Anomalies`, `Firmware`, `Device`, `Inventory`."""
 
 from __future__ import annotations
 
@@ -53,6 +53,41 @@ class Anomalies:
 
 
 @dataclass(slots=True)
+class Firmware:
+    """One firmware image reported by the panel or by its transmission module.
+
+    `kind` is the raw `firmwareType`, kept as a string rather than an enum: `SOFT` and
+    `RADIO` are the two values observed, and an unrecognised one must not be dropped.
+    """
+
+    kind: str
+    version: str
+    release_date: int | None = None
+    file_name: str = ""
+    is_critical: bool = False
+
+    @classmethod
+    def from_json(cls, data: dict[str, Any]) -> Firmware:
+        current = data.get("currentVersion") or {}
+        return cls(
+            kind=data.get("firmwareType") or "",
+            version=str(current.get("releaseVersion") or ""),
+            release_date=current.get("releaseDate"),
+            file_name=current.get("fileName") or "",
+            is_critical=bool(current.get("isCritical")),
+        )
+
+
+def _firmwares(container: dict[str, Any]) -> list[Firmware]:
+    entries = (container.get("firmwareInfo") or {}).get("firmwares") or []
+    return [Firmware.from_json(f) for f in entries]
+
+
+def _version(firmwares: list[Firmware], kind: str) -> str | None:
+    return next((f.version for f in firmwares if f.kind == kind and f.version), None)
+
+
+@dataclass(slots=True)
 class Device:
     """A detector (`sensor`) or a control device (`command`)."""
 
@@ -97,6 +132,8 @@ class Inventory:
     has_io: bool = False
     central_anomalies: Anomalies = field(default_factory=Anomalies)
     plug_serial: str = ""
+    central_firmwares: list[Firmware] = field(default_factory=list)
+    plug_firmwares: list[Firmware] = field(default_factory=list)
     devices: list[Device] = field(default_factory=list)
     raw: dict[str, Any] = field(default_factory=dict)
 
@@ -112,6 +149,8 @@ class Inventory:
             has_io=bool(central.get("hasIO")),
             central_anomalies=Anomalies.from_json(central.get("anomalies")),
             plug_serial=plug.get("serialNumber") or "",
+            central_firmwares=_firmwares(central),
+            plug_firmwares=_firmwares(plug),
             devices=[Device.from_json(d, "sensor") for d in sensors]
             + [Device.from_json(d, "command") for d in commands],
             raw=data,
@@ -124,3 +163,18 @@ class Inventory:
     @property
     def controls(self) -> list[Device]:
         return [d for d in self.devices if d.kind == "command"]
+
+    @property
+    def software_version(self) -> str | None:
+        """Main panel software, `SOFT` on the central unit."""
+        return _version(self.central_firmwares, "SOFT")
+
+    @property
+    def radio_version(self) -> str | None:
+        """Panel radio firmware, versioned separately from the software."""
+        return _version(self.central_firmwares, "RADIO")
+
+    @property
+    def transmitter_version(self) -> str | None:
+        """Transmission module software, carried by the panel's `plug`."""
+        return _version(self.plug_firmwares, "SOFT")

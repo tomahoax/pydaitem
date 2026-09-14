@@ -105,6 +105,81 @@ def test_inventory_parses_devices_and_anomalies() -> None:
     assert not hasattr(inventory.sensors[0], "is_open")
 
 
+def test_inventory_parses_the_three_firmware_versions() -> None:
+    """The panel carries two firmwares, its transmission module a third.
+
+    Shapes taken from a live installation: the central unit reports SOFT and RADIO, the
+    plug reports SOFT alone, and only the plug entry carries the optional metadata.
+    """
+    inventory = Inventory.from_json(
+        {
+            "central": {
+                "firmwareInfo": {
+                    "firmwares": [
+                        {"firmwareType": "SOFT", "currentVersion": {"releaseVersion": "6.4.13"}},
+                        {"firmwareType": "RADIO", "currentVersion": {"releaseVersion": "15"}},
+                    ]
+                },
+                "plug": {
+                    "serialNumber": "SN-PLUG",
+                    "firmwareInfo": {
+                        "firmwares": [
+                            {
+                                "firmwareType": "SOFT",
+                                "currentVersion": {
+                                    "releaseVersion": "7.8.4",
+                                    "releaseDate": 1746576000000,
+                                    "fileName": "image.bin",
+                                    "isCritical": False,
+                                },
+                            }
+                        ]
+                    },
+                },
+            }
+        }
+    )
+    assert inventory.software_version == "6.4.13"
+    assert inventory.radio_version == "15"
+    assert inventory.transmitter_version == "7.8.4"
+
+    plug = inventory.plug_firmwares[0]
+    assert plug.release_date == 1746576000000
+    assert plug.file_name == "image.bin"
+    assert plug.is_critical is False
+
+
+def test_missing_firmware_information_is_absent_not_empty() -> None:
+    """An installation that reports no firmware must yield None, never a blank string."""
+    inventory = Inventory.from_json({"central": {"serialNumber": "SN"}})
+    assert inventory.central_firmwares == []
+    assert inventory.software_version is None
+    assert inventory.radio_version is None
+    assert inventory.transmitter_version is None
+
+
+def test_an_unknown_firmware_type_is_kept_rather_than_dropped() -> None:
+    """`firmwareType` is a raw string on purpose, so a new value survives parsing."""
+    inventory = Inventory.from_json(
+        {
+            "central": {
+                "firmwareInfo": {
+                    "firmwares": [
+                        {
+                            "firmwareType": "SOMETHING_NEW",
+                            "currentVersion": {"releaseVersion": "1.0"},
+                        },
+                        {"firmwareType": "SOFT", "currentVersion": {"releaseVersion": "6.4.13"}},
+                    ]
+                }
+            }
+        }
+    )
+    assert [f.kind for f in inventory.central_firmwares] == ["SOMETHING_NEW", "SOFT"]
+    # The known type still resolves, the unknown one does not shadow it.
+    assert inventory.software_version == "6.4.13"
+
+
 def test_headers_identify_the_client_honestly() -> None:
     """The client announces itself as pydaitem rather than impersonating the app.
 

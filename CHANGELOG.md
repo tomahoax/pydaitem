@@ -3,12 +3,24 @@
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and semantic
 versioning.
 
-## [Unreleased]
+## [0.2.0] - 2026-09-14
 
 ### Added
 
+- Firmware versions, which the inventory endpoint has always returned and this library
+  dropped on the floor. `Inventory.central_firmwares` and `.plug_firmwares` carry the full
+  entries, and `.software_version`, `.radio_version` and `.transmitter_version` resolve the
+  common case. Confirmed against a live installation: the panel reports `SOFT` and `RADIO`,
+  its transmission module a `SOFT` of its own, matching the three versions the mobile app
+  shows. `firmwareType` is kept as a raw string so an unrecognised value survives parsing,
+  and an installation that reports nothing yields `None` rather than an empty string.
 - Python 3.14 is now tested in CI and declared in the package metadata. The supported floor
   stays at 3.11.
+
+### Notes
+
+- No firmware version exists per detector. The API exposes it for the panel and its
+  transmission module only.
 
 ## [0.1.1] - 2026-09-13
 

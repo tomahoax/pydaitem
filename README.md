@@ -187,7 +187,7 @@ in your code**. That only holds if you stay on the stable surface.
 - The exception hierarchy rooted at `DaitemError`.
 - Model attributes and the semantic properties: `SystemStatus.panel_state`, `.is_armed`,
   `.is_arming`, `.active_groups`, `Anomalies.faults`, `.has()`, `Inventory.sensors`,
-  `Inventory.controls`, and so on.
+  `Inventory.controls`, `Inventory.software_version`, and so on.
 
 **Not stable.** These track the API and may change in any release.
 
@@ -219,6 +219,11 @@ when it can.
 **No live per-detector state.** The inventory gives identity, group, inhibition and
 **faults** (battery, tamper, radio, masking), but not the open/closed state of a contact.
 An opening only shows up in the panel history, while the system is armed.
+
+**Firmware versions come from the inventory too.** The panel reports a `SOFT` and a `RADIO`
+image, its transmission module a `SOFT` one of its own, reachable as
+`Inventory.software_version`, `.radio_version` and `.transmitter_version`, or in full
+through `.central_firmwares` and `.plug_firmwares`. No firmware version exists per detector.
 
 **Faults live in the inventory**, so `read_inventory()` must be called on every poll cycle
 for fault reporting to stay live. It needs no panel session, so this is cheap.
