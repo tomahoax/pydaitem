@@ -85,8 +85,10 @@ async def test_a_read_inside_ones_own_session_does_not_wait_for_itself(
     """Shared reads run in a task of their own, which would wait for the caller's lock."""
     fake.fail("GET", "/state", status=403, message="status.nottmsessionid")
     async with system.client.panel.session(fake.system_id, fake.code):
+        # asyncio.timeout, not wait_for: before 3.12 wait_for runs the read in another task.
         with pytest.raises(DaitemUsageError, match="already open in this task"):
-            await asyncio.wait_for(system.panel.read(), timeout=2)
+            async with asyncio.timeout(2):
+                await system.panel.read()
 
 
 # -- Answers kept for callers that accept them a little old ----------------------------
