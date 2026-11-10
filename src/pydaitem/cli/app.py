@@ -6,14 +6,45 @@ import argparse
 import asyncio
 import logging
 import sys
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 
 from ..credentials import resolve_credentials
-from ..exceptions import DaitemAuthError, DaitemError, DaitemSessionBusyError, MissingCredentials
+from ..exceptions import (
+    DaitemAuthError,
+    DaitemError,
+    DaitemSessionBusyError,
+    DaitemUsageError,
+    MissingCredentials,
+)
 from ..system import DaitemSystem, connect
 from ..tokens import FileTokenStore
-from .commands import _cmd_control, _cmd_devices, _cmd_presets, _cmd_status, _cmd_systems
-from .exit_codes import EXIT_AUTH, EXIT_ERROR, EXIT_OK, EXIT_SESSION_BUSY, EXIT_USAGE
+from .commands import (
+    _cmd_control,
+    _cmd_devices,
+    _cmd_logout,
+    _cmd_modes,
+    _cmd_presets,
+    _cmd_status,
+    _cmd_systems,
+)
+from .exit_codes import (
+    EXIT_AUTH,
+    EXIT_ERROR,
+    EXIT_INTERRUPTED,
+    EXIT_OK,
+    EXIT_SESSION_BUSY,
+    EXIT_USAGE,
+)
+from .extras import (
+    _cmd_automate,
+    _cmd_automations,
+    _cmd_cameras,
+    _cmd_clips,
+    _cmd_dump,
+    _cmd_logbook,
+    _cmd_scenario,
+    _cmd_scenarios,
+)
 from .parser import build_parser
 from .schedule import _cmd_schedule
 
@@ -29,11 +60,14 @@ __all__ = [
 
 async def _run(args: argparse.Namespace) -> int:
     creds = resolve_credentials(env_file=args.env_file, system_id=args.system_id)
-    store = FileTokenStore(args.token_file)
+    store = FileTokenStore(args.token_file, account=creds.email)
 
-    # `systems` is what you run to choose a system, so it precedes the façade.
+    # `systems` is what you run to choose a system, so it precedes the façade, and `logout`
+    # needs none.
     if args.command == "systems":
         return await _cmd_systems(args, creds, store)
+    if args.command == "logout":
+        return await _cmd_logout(args, creds, store)
 
     async with connect(
         creds.email,
@@ -45,18 +79,31 @@ async def _run(args: argparse.Namespace) -> int:
         return await _dispatch(args, system)
 
 
+#: Every subcommand that works on one installation, by name.
+_COMMANDS: dict[str, Callable[[argparse.Namespace, DaitemSystem], Awaitable[int]]] = {
+    "status": _cmd_status,
+    "devices": _cmd_devices,
+    "presets": _cmd_presets,
+    "modes": _cmd_modes,
+    "schedule": _cmd_schedule,
+    "arm": _cmd_control,
+    "disarm": _cmd_control,
+    "automations": _cmd_automations,
+    "automate": _cmd_automate,
+    "scenarios": _cmd_scenarios,
+    "scenario": _cmd_scenario,
+    "cameras": _cmd_cameras,
+    "clips": _cmd_clips,
+    "logbook": _cmd_logbook,
+    "dump": _cmd_dump,
+}
+
+
 async def _dispatch(args: argparse.Namespace, system: DaitemSystem) -> int:
-    if args.command == "status":
-        return await _cmd_status(args, system)
-    if args.command == "devices":
-        return await _cmd_devices(args, system)
-    if args.command == "presets":
-        return await _cmd_presets(args, system)
-    if args.command == "schedule":
-        return await _cmd_schedule(args, system)
-    if args.command in {"arm", "disarm"}:
-        return await _cmd_control(args, system)
-    return EXIT_USAGE  # pragma: no cover - argparse rejects this first
+    command = _COMMANDS.get(args.command)
+    if command is None:  # pragma: no cover - argparse rejects this first
+        return EXIT_USAGE
+    return await command(args, system)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -77,8 +124,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     except DaitemAuthError as err:
         print(f"Authentication failed: {err}", file=sys.stderr)
         return EXIT_AUTH
+    except DaitemUsageError as err:
+        print(f"{err}.", file=sys.stderr)
+        return EXIT_USAGE
     except DaitemError as err:
         print(f"Error: {err}", file=sys.stderr)
         return EXIT_ERROR
-    except KeyboardInterrupt:  # pragma: no cover - interactive only
-        return EXIT_ERROR
+    except KeyboardInterrupt:
+        print("Interrupted.", file=sys.stderr)
+        return EXIT_INTERRUPTED

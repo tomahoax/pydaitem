@@ -139,6 +139,70 @@ async def test_three_presets_are_all_discovered() -> None:
         )
 
 
+def _widgets_with(items: list[dict[str, object]]) -> Callable:
+    async def widgets(_request: web.Request) -> web.Response:
+        return web.json_response(
+            {"widgets": [{"widgetType": "widget_type_partial_arming", "widgetItems": items}]}
+        )
+
+    return widgets
+
+
+async def test_presets_are_matched_by_name_whatever_their_order() -> None:
+    """The app names its presets `_presence`, `_1` and `_2`: the name decides the mode."""
+    items: list[dict[str, object]] = [
+        {"id": 7, "name": "partial_arming_name_2"},
+        {"id": 5, "name": "partial_arming_name_1"},
+        {"id": 3, "name": "partial_arming_name_presence"},
+    ]
+    routes = [
+        ("GET", USER_PATH, user),
+        ("GET", WIDGETS_PATH, _widgets_with(items)),
+        ("POST", CONNECT_PATH, connect),
+        ("POST", DISCONNECT_PATH, disconnect),
+    ]
+    async for system in serve(routes):
+        await system.capabilities.arm_modes()
+        assert system.capabilities._preset_for(ArmMode.PRESENCE) == 3
+        assert system.capabilities._preset_for(ArmMode.PARTIAL) == 5
+        assert system.capabilities._preset_for(ArmMode.PARTIAL_2) == 7
+
+
+async def test_second_preset_alone_stays_the_second_mode() -> None:
+    """Without `_1`, the `_2` preset is still PARTIAL_2: the order no longer shifts it."""
+    items: list[dict[str, object]] = [
+        {"id": 0, "name": "partial_arming_name_presence"},
+        {"id": 2, "name": "partial_arming_name_2"},
+    ]
+    routes = [
+        ("GET", USER_PATH, user),
+        ("GET", WIDGETS_PATH, _widgets_with(items)),
+        ("POST", CONNECT_PATH, connect),
+        ("POST", DISCONNECT_PATH, disconnect),
+    ]
+    async for system in serve(routes):
+        modes = await system.capabilities.arm_modes()
+        assert modes == frozenset({ArmMode.AWAY, ArmMode.PRESENCE, ArmMode.PARTIAL_2})
+
+
+async def test_unknown_preset_names_fall_back_to_order() -> None:
+    """A name the app does not use still gets a mode, the first one left free."""
+    items: list[dict[str, object]] = [
+        {"id": 4, "name": "partial_arming_name_1"},
+        {"id": 9, "name": "something_else"},
+    ]
+    routes = [
+        ("GET", USER_PATH, user),
+        ("GET", WIDGETS_PATH, _widgets_with(items)),
+        ("POST", CONNECT_PATH, connect),
+        ("POST", DISCONNECT_PATH, disconnect),
+    ]
+    async for system in serve(routes):
+        await system.capabilities.arm_modes()
+        assert system.capabilities._preset_for(ArmMode.PARTIAL) == 4
+        assert system.capabilities._preset_for(ArmMode.PARTIAL_2) == 9
+
+
 async def test_arm_groups_sends_the_requested_combination() -> None:
     """Direct per-group control, bypassing named presets entirely."""
     received: dict[str, object] = {}

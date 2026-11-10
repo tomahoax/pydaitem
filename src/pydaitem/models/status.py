@@ -6,20 +6,23 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ..const import ARMED_PANEL_STATES, RAW_TO_PANEL_STATE, PanelState
-from ._shared import _warn_unknown
+from ._shared import _warn_unknown, dicts, int_id
 
 
-@dataclass(slots=True)
+@dataclass(slots=True, kw_only=True)
 class Group:
     """An alarm group (zone)."""
 
     id: int
     active: bool
     name: str | None = None
+    raw: dict[str, Any] = field(default_factory=dict, repr=False)
 
     @classmethod
     def from_json(cls, data: dict[str, Any]) -> Group:
-        return cls(id=data["id"], active=bool(data.get("active")), name=data.get("name"))
+        return cls(
+            id=int_id(data["id"]), active=bool(data.get("active")), name=data.get("name"), raw=data
+        )
 
 
 def _parse_groups(data: dict[str, Any]) -> list[Group]:
@@ -29,22 +32,22 @@ def _parse_groups(data: dict[str, Any]) -> list[Group]:
     instead puts the **active group ids** there as bare integers, with the full objects in
     `groupList`. Both are normalised to `Group` here so callers never see the difference.
     """
-    raw = data.get("groups") or []
-    if raw and all(isinstance(item, int) for item in raw):
+    raw = data.get("groups")
+    raw = raw if isinstance(raw, list) else []
+    if raw and all(isinstance(item, int) and not isinstance(item, bool) for item in raw):
         active_ids = set(raw)
-        catalogue = data.get("groupList") or []
+        catalogue = [g for g in dicts(data.get("groupList")) if "id" in g]
         if catalogue:
+            groups = [Group.from_json(g) for g in catalogue]
             return [
-                Group(id=g["id"], active=g["id"] in active_ids, name=g.get("name"))
-                for g in catalogue
-                if isinstance(g, dict) and "id" in g
+                Group(id=g.id, active=g.id in active_ids, name=g.name, raw=g.raw) for g in groups
             ]
         return [Group(id=gid, active=True) for gid in raw]
 
-    return [Group.from_json(g) for g in raw if isinstance(g, dict)]
+    return [Group.from_json(g) for g in dicts(raw)]
 
 
-@dataclass(slots=True)
+@dataclass(slots=True, kw_only=True)
 class SystemStatus:
     """Overall system state, returned by `/state` and by commands."""
 
@@ -53,12 +56,14 @@ class SystemStatus:
     command_status: str | None = None
     opened_issue_numbers: list[Any] = field(default_factory=list)
     defaults: str | None = None
-    raw: dict[str, Any] = field(default_factory=dict)
+    raw: dict[str, Any] = field(default_factory=dict, repr=False)
 
     @classmethod
     def from_json(cls, data: dict[str, Any]) -> SystemStatus:
+        state = data.get("systemState")
         return cls(
-            state=data.get("systemState", ""),
+            # A value that is not a string still reads as an unknown state, not a crash.
+            state=state if isinstance(state, str) else ("" if state is None else str(state)),
             groups=_parse_groups(data),
             command_status=data.get("commandStatus"),
             opened_issue_numbers=data.get("openedIssueNumbers") or [],

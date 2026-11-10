@@ -8,7 +8,7 @@ from typing import Any
 
 from ..models import ScheduleProgram
 from ..system import DaitemSystem
-from .exit_codes import EXIT_ERROR, EXIT_OK, EXIT_USAGE
+from .exit_codes import EXIT_OK, EXIT_USAGE
 from .output import _confirm, _emit
 
 
@@ -61,10 +61,10 @@ async def _cmd_schedule_set(args: argparse.Namespace, system: DaitemSystem) -> i
     if existing is None:
         print(
             f"No program with id {args.id}. Creating a new program is not supported "
-            "(never confirmed on the live API) - only an existing id can be updated.",
+            "(never confirmed on the live API): only an existing id can be updated.",
             file=sys.stderr,
         )
-        return EXIT_ERROR
+        return EXIT_USAGE
 
     command = existing.command
     if args.arm:

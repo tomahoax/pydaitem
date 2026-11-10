@@ -5,11 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from ..const import RAW_TO_FAULT, Fault
-from ._shared import _warn_unknown
+from ..const import RAW_TO_FAULT, DeviceKind, Fault
+from ._shared import _warn_unknown, dicts
 
 
-@dataclass(slots=True)
+@dataclass(slots=True, kw_only=True)
 class Anomalies:
     """Faults reported by a device. Keys vary with the device type."""
 
@@ -17,7 +17,12 @@ class Anomalies:
 
     @classmethod
     def from_json(cls, data: dict[str, Any] | None) -> Anomalies:
-        return cls(flags={k: bool(v) for k, v in (data or {}).items()})
+        anomalies = cls(
+            flags={str(k): bool(v) for k, v in data.items()} if isinstance(data, dict) else {}
+        )
+        # Warn now, once per key: a fault key the API renamed would otherwise just vanish.
+        anomalies.unknown_keys  # noqa: B018 - read for its warning
+        return anomalies
 
     @property
     def faults(self) -> set[Fault]:
@@ -52,12 +57,12 @@ class Anomalies:
         return any(self.flags.values())
 
 
-@dataclass(slots=True)
+@dataclass(slots=True, kw_only=True)
 class Firmware:
     """One firmware image reported by the panel or by its transmission module.
 
     `kind` is the raw `firmwareType`, kept as a string rather than an enum: `SOFT` and
-    `RADIO` are the two values observed, and an unrecognised one must not be dropped.
+    `RADIO` are the known values, and an unrecognised one must not be dropped.
     """
 
     kind: str
@@ -65,46 +70,61 @@ class Firmware:
     release_date: int | None = None
     file_name: str = ""
     is_critical: bool = False
+    raw: dict[str, Any] = field(default_factory=dict, repr=False)
 
     @classmethod
     def from_json(cls, data: dict[str, Any]) -> Firmware:
-        current = data.get("currentVersion") or {}
+        current = data.get("currentVersion")
+        current = current if isinstance(current, dict) else {}
         return cls(
             kind=data.get("firmwareType") or "",
             version=str(current.get("releaseVersion") or ""),
             release_date=current.get("releaseDate"),
             file_name=current.get("fileName") or "",
             is_critical=bool(current.get("isCritical")),
+            raw=data,
         )
 
 
 def _firmwares(container: dict[str, Any]) -> list[Firmware]:
-    entries = (container.get("firmwareInfo") or {}).get("firmwares") or []
-    return [Firmware.from_json(f) for f in entries]
+    return [Firmware.from_json(f) for f in dicts(container.get("firmwareInfo"), "firmwares")]
+
+
+def _object(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
 
 
 def _version(firmwares: list[Firmware], kind: str) -> str | None:
     return next((f.version for f in firmwares if f.kind == kind and f.version), None)
 
 
-@dataclass(slots=True)
+@dataclass(slots=True, kw_only=True)
 class Device:
-    """A detector (`sensor`) or a control device (`command`)."""
+    """One device of the inventory: a detector, a control, a siren, the box...
+
+    Every family shares this shape in the app's models.
+    """
 
     index: int
     name: str
     serial_number: str
     type: str
-    kind: str
-    """Either "sensor" or "command", from the originating configuration section."""
+    kind: DeviceKind
+    """The inventory section it comes from."""
     group: int | None = None
     inhibited: bool = False
     inhibitable: bool = False
     is_video: bool = False
     anomalies: Anomalies = field(default_factory=Anomalies)
+    firmwares: list[Firmware] = field(default_factory=list)
+    """Empty for most devices: no detector reported one on the installations read."""
+    triggered: bool | None = None
+    """Whether a fire or PPMS trigger has gone off. None for the other families."""
+    raw: dict[str, Any] = field(default_factory=dict, repr=False)
 
     @classmethod
-    def from_json(cls, data: dict[str, Any], kind: str) -> Device:
+    def from_json(cls, data: dict[str, Any], kind: DeviceKind) -> Device:
+        triggered = data.get("isTriggered")
         return cls(
             index=data.get("index", 0),
             name=data.get("name") or "",
@@ -116,10 +136,30 @@ class Device:
             inhibitable=bool(data.get("isInhibitable")),
             is_video=bool(data.get("isVideo")),
             anomalies=Anomalies.from_json(data.get("anomalies")),
+            firmwares=_firmwares(data),
+            triggered=triggered if isinstance(triggered, bool) else None,
+            raw=data,
         )
 
 
-@dataclass(slots=True)
+def _devices(data: dict[str, Any]) -> list[Device]:
+    """Every device of the inventory, section by section, as the app's device screen."""
+    generic = data.get("genericSensors")
+    generic = generic if isinstance(generic, dict) else {}
+    sections = [
+        (DeviceKind.SENSOR, dicts(generic, "sensors")),
+        (DeviceKind.COMMAND, dicts(data.get("commands"))),
+        (DeviceKind.SIREN, dicts(data.get("sirens"))),
+        (DeviceKind.TRANSMITTER, dicts(data.get("transmitters"))),
+        (DeviceKind.TRANSCEIVER, dicts(data.get("transceivers"))),
+        (DeviceKind.BOX, dicts([data.get("box")])),
+        (DeviceKind.FIRE_TRIGGER, dicts(generic, "fireTriggers")),
+        (DeviceKind.PPMS_TRIGGER, dicts(generic, "ppmsTriggers")),
+    ]
+    return [Device.from_json(entry, kind) for kind, entries in sections for entry in entries]
+
+
+@dataclass(slots=True, kw_only=True)
 class Inventory:
     """Device inventory, from `/v2/systems/<id>/configuration`.
 
@@ -135,14 +175,17 @@ class Inventory:
     central_firmwares: list[Firmware] = field(default_factory=list)
     plug_firmwares: list[Firmware] = field(default_factory=list)
     devices: list[Device] = field(default_factory=list)
-    raw: dict[str, Any] = field(default_factory=dict)
+    alerts_enabled: bool | None = None
+    """Whether alerts can be set up on this installation (`isAlertEnabled`)."""
+    scenarios_enabled: bool | None = None
+    """Whether scenarios can be set up on this installation (`isScenarioEnabled`)."""
+    raw: dict[str, Any] = field(default_factory=dict, repr=False)
 
     @classmethod
     def from_json(cls, data: dict[str, Any]) -> Inventory:
-        central = data.get("central") or {}
-        plug = central.get("plug") or data.get("plug") or {}
-        sensors = (data.get("genericSensors") or {}).get("sensors") or []
-        commands = data.get("commands") or []
+        central = _object(data.get("central"))
+        plug = _object(central.get("plug")) or _object(data.get("plug"))
+        alerts, scenarios = data.get("isAlertEnabled"), data.get("isScenarioEnabled")
         return cls(
             central_serial=central.get("serialNumber") or "",
             central_type=central.get("type") or "",
@@ -151,18 +194,23 @@ class Inventory:
             plug_serial=plug.get("serialNumber") or "",
             central_firmwares=_firmwares(central),
             plug_firmwares=_firmwares(plug),
-            devices=[Device.from_json(d, "sensor") for d in sensors]
-            + [Device.from_json(d, "command") for d in commands],
+            devices=_devices(data),
+            alerts_enabled=alerts if isinstance(alerts, bool) else None,
+            scenarios_enabled=scenarios if isinstance(scenarios, bool) else None,
             raw=data,
         )
 
     @property
     def sensors(self) -> list[Device]:
-        return [d for d in self.devices if d.kind == "sensor"]
+        return self.of_kind(DeviceKind.SENSOR)
 
     @property
     def controls(self) -> list[Device]:
-        return [d for d in self.devices if d.kind == "command"]
+        return self.of_kind(DeviceKind.COMMAND)
+
+    def of_kind(self, kind: DeviceKind) -> list[Device]:
+        """The devices of one family, such as `of_kind(DeviceKind.SIREN)`."""
+        return [d for d in self.devices if d.kind == kind]
 
     @property
     def software_version(self) -> str | None:

@@ -9,6 +9,7 @@ something tied to a particular caller.
 ```
 src/pydaitem/
   client/    Low-level client, one namespace per API resource, mirrors the API one for one.
+             Every call of the API map has a method here.
   system/    Semantic façade bound to one installation: the stable, recommended surface.
   models/    Data classes returned by both layers, grouped by domain.
   const/     Network configuration, semantic vocabulary, and the raw-to-semantic mappings.
@@ -16,74 +17,77 @@ src/pydaitem/
   tokens.py       Refresh-token persistence protocol and implementations.
   credentials.py  Credential resolution for scripts and command line tools.
   exceptions.py   The exception hierarchy, rooted at `DaitemError`.
+  _files.py       Private, atomic writes for files that hold a secret or personal data.
 ```
 
+Outside the package, [docs/api/openapi.yaml](api/openapi.yaml) describes every call the
+mobile app makes. `tests/test_api_spec_vs_library.py`
+holds `client/` and `const/` to it: every operation has a method, and the raw states, exit
+delay states, server messages, command statuses and retry rules are the same.
+
 `client/` and `system/` are deliberately separate layers with different stability
-guarantees (see the README's "Public API contract"): `client/` changes whenever the Daitem
+guarantees (see the [stability promise](python.md#stability-promise)): `client/` changes whenever the Daitem
 API does, `system/` absorbs that change so callers do not have to.
 
 ## Composition pattern
 
-Both `client/` and `system/` are built the same way: a small, shared, mutable state object
+Both `client/` and `system/` are built the same way: a small, shared state object
 (`_ClientState`, `_SystemState`) carries configuration and cross-cutting state (tokens, the
 underlying HTTP session, the current panel session id), and every service receives exactly
 the pieces it depends on through its constructor rather than reaching into a shared base
 class.
 
-```
-_ClientState ──► _Auth ──► _Transport ──┬──► _Account ──► _Commands
-                                        ├──► _Panel
-                                        ├──► _Logbook
-                                        └──► _Schedule
-
-_SystemState ──► _Capabilities ──► _Commands
-             └─► _Schedule
+```mermaid
+flowchart LR
+    CS[_ClientState] --> Auth[_Auth] --> T[_Transport]
+    T --> R[one service per resource<br/>account, panel, commands, widgets, ...]
+    SS[_SystemState] --> F[one façade service per API resource<br/>panel, commands, schedule, ...]
+    F -->|calls| R
 ```
 
-The façade assembles these services and exposes them as public attributes, one namespace
-per resource, with no delegation boilerplate:
+The two entry points assemble these services and expose them as public attributes, one
+namespace per resource, with no delegation boilerplate. The constructors are the
+reference for who depends on whom: [`DaitemClient`](../src/pydaitem/client/__init__.py)
+and [`DaitemSystem`](../src/pydaitem/system/__init__.py).
 
-```python
-class DaitemClient:
-    def __init__(self, email, password, ...) -> None:
-        self._state = _ClientState(...)
-        self._auth = _Auth(self._state)
-        self._transport = _Transport(self._state, self._auth)
-        self.account = _Account(self._transport)
-        self.panel = _Panel(self._state, self._transport)
-        self.commands = _Commands(self._transport, self.account)
-        self.logbook = _Logbook(self._transport)
-        self.schedule = _Schedule(self._transport)
-```
+The façade follows the same resources as the API map (its tags), with method names of its
+own: `system.panel.read()`, `system.video.cameras()`. A test holds it to the map. What is
+not itself a resource stays a plain method or property on the entry point: `login`, `close`
+and `token_url` on the client, `read_extras` and `collect_raw` on the façade, since both
+span several resources. A dependency between two services
+(`_Commands` needing `_Account` and `_Widgets` to list the arming presets, for instance) is
+an explicit constructor argument, so it is visible and type-checked rather than an implicit
+assumption about call order.
 
-Plumbing that is not itself a resource (`login`, `close`, `read_status`, `read_inventory`,
-...) stays as a plain method or property directly on the façade instead of living under a
-namespace. A dependency between two services (`_Commands` needing `_Account` to resolve a
-preset before arming, for instance) is an explicit constructor argument, so it is visible
-and type-checked rather than an implicit assumption about call order.
+Shared plumbing lives once. On the client side, `_Transport` holds the retry rules, the
+error mapping and the typed requests (`request_object`, `request_bytes`), and `jobs.py` the
+polling of asynchronous answers. On the façade side, `_SystemState.session()` opens a panel
+session and `extras.py` reads with at most one.
 
 Each service, and each model cluster, lives in its own module, named after the resource it
 covers (`account.py`, `panel.py`, `commands.py`, ...). A module stays private to its
-package (classes carry a leading underscore); only the façade and the namespaces it exposes
-are public.
+package (classes carry a leading underscore). Only the entry points and the namespaces they
+expose are public.
 
 ## Models
 
 `models/` groups data classes by the domain they describe rather than by which endpoint
-produced them: `status` (`SystemStatus`, `Group`), `inventory` (`Inventory`, `Device`,
-`Anomalies`), `schedule` (`Schedule`, `ScheduleProgram`), `account` (`System`). Every class
-is a `dataclass(slots=True)` with a `from_json` constructor and keeps the original payload
-in `raw`, since the API is private and may add or drop fields without notice — nothing is
-validated strictly.
+produced them. The [package docstring](../src/pydaitem/models/__init__.py) lists the
+modules. Every class is a `dataclass(slots=True)` with a `from_json` constructor, and those
+built from a whole answer keep it in `raw`, since the API is private and may add or drop
+fields without notice. Nothing is validated strictly, and `models/_shared.py` holds the
+lenient readers they share.
 
 ## Vocabulary and mappings
 
 `const/` keeps the raw API vocabulary (`SystemState`, not part of the public contract)
 separate from the vocabulary this library owns and guarantees (`PanelState`, `ArmMode`,
 `Fault`), with the mapping between them centralised in a small number of dictionaries
-(`RAW_TO_PANEL_STATE`, `RAW_TO_FAULT`). An API value with no entry degrades to `UNKNOWN`
-(or an `unknown_keys` entry) with a one-off warning, rather than failing or silently
-reading as absent — so an API change surfaces in a consumer's logs instead of vanishing.
+(`RAW_TO_PANEL_STATE`, `RAW_TO_FAULT`). Server messages that call for a specific reaction
+map to their own exception in one table in `client/transport.py`. An API value with no
+entry degrades to `UNKNOWN` (or an `unknown_keys` entry) with a one-off warning, rather than
+failing or silently reading as absent, so an API change surfaces in a consumer's logs
+instead of vanishing.
 
 ## Dependency policy
 

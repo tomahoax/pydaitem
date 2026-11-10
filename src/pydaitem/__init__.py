@@ -1,80 +1,125 @@
-"""pydaitem — async client for the private Daitem Secure API (Atral Topaze platform).
+"""pydaitem: async client for the private Daitem Secure API (Atral Topaze platform).
 
-Unofficial library, reverse-engineered from the mobile app. Not affiliated with or
-endorsed by Daitem or the Atral group, and the API it consumes may change without notice.
+Unofficial library. Not affiliated with or endorsed by Daitem or the Atral group, and the
+API it consumes may change without notice.
 """
 
 from __future__ import annotations
 
 from .client import DaitemClient
 from .const import (
-    APP_KEEPALIVE_INTERVAL,
     ARMED_PANEL_STATES,
-    USER_AGENT,
     VERSION,
     ArmMode,
+    AutomatismCategory,
+    AutomatismCommand,
+    AutomatismStateType,
+    CameraType,
+    ClipCategory,
+    ClipFormat,
+    ClipKind,
+    CommandStatus,
+    DeviceKind,
     Fault,
     PanelState,
+    ServerMessage,
 )
 from .credentials import Credentials, resolve_credentials
 from .exceptions import (
+    DaitemApiError,
     DaitemAuthError,
+    DaitemBadCodeError,
     DaitemCommandError,
     DaitemConnectionError,
     DaitemError,
     DaitemForbiddenError,
     DaitemNoSessionError,
+    DaitemRateLimitedError,
     DaitemSessionBusyError,
+    DaitemSessionRestrictedError,
+    DaitemTransmitterOfflineError,
+    DaitemUsageError,
     MissingCredentials,
+    Remedy,
 )
 from .models import (
     Anomalies,
+    Automatism,
+    Camera,
+    Clip,
     Device,
     Firmware,
     Group,
     Inventory,
+    LogEntry,
+    Scenario,
     Schedule,
     ScheduleProgram,
     System,
     SystemStatus,
 )
-from .system import DaitemSystem, connect
+from .redaction import redact, redact_identifier
+from .system import DaitemSystem, Extras, Snapshot, connect
 from .tokens import FileTokenStore, MemoryTokenStore, TokenStore
 
 __version__ = VERSION
 
 __all__ = [
-    "APP_KEEPALIVE_INTERVAL",
     "ARMED_PANEL_STATES",
-    "USER_AGENT",
     "VERSION",
     "Anomalies",
     "ArmMode",
+    "Automatism",
+    "AutomatismCategory",
+    "AutomatismCommand",
+    "AutomatismStateType",
+    "Camera",
+    "CameraType",
+    "Clip",
+    "ClipCategory",
+    "ClipFormat",
+    "ClipKind",
+    "CommandStatus",
     "Credentials",
+    "DaitemApiError",
     "DaitemAuthError",
+    "DaitemBadCodeError",
     "DaitemClient",
     "DaitemCommandError",
     "DaitemConnectionError",
     "DaitemError",
     "DaitemForbiddenError",
     "DaitemNoSessionError",
+    "DaitemRateLimitedError",
     "DaitemSessionBusyError",
+    "DaitemSessionRestrictedError",
     "DaitemSystem",
+    "DaitemTransmitterOfflineError",
+    "DaitemUsageError",
     "Device",
+    "DeviceKind",
+    "Extras",
     "Fault",
     "FileTokenStore",
     "Firmware",
     "Group",
     "Inventory",
+    "LogEntry",
     "MemoryTokenStore",
     "MissingCredentials",
     "PanelState",
+    "Remedy",
+    "Scenario",
     "Schedule",
     "ScheduleProgram",
+    "ServerMessage",
+    "Snapshot",
     "System",
     "SystemStatus",
     "TokenStore",
     "__version__",
     "connect",
+    "redact",
+    "redact_identifier",
     "resolve_credentials",
 ]

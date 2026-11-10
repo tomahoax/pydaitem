@@ -13,31 +13,55 @@ from pydaitem.const import ARMED_PANEL_STATES
 from pydaitem.models import Anomalies, _warn_unknown
 
 
-def test_armed_partial_2_counts_as_armed_even_though_unmapped() -> None:
-    """`ArmMode.PARTIAL_2`'s own armed state has no raw mapping yet (never observed live),
-    but the semantic value itself must already count as armed once one is added."""
-    assert PanelState.ARMED_PARTIAL_2 in ARMED_PANEL_STATES
-
-
 def test_known_states_map_to_semantic_values() -> None:
     cases = {
         "off": PanelState.DISARMED,
         "tempo": PanelState.ARMING,
-        "tempo1": PanelState.ARMING,
         "tempogroup": PanelState.ARMING,
+        "tempo1": PanelState.ARMING,
+        "tempo2": PanelState.ARMING,
         "on": PanelState.ARMED_FULL,
-        "presence": PanelState.ARMED_PRESENCE,
         "group": PanelState.ARMED_GROUPS,
         "partial1": PanelState.ARMED_PARTIAL,
+        "partial2": PanelState.ARMED_PARTIAL_2,
+        "presence": PanelState.ARMED_PRESENCE,
+        "apprent": PanelState.MAINTENANCE,
+        "essai": PanelState.MAINTENANCE,
     }
     for raw, expected in cases.items():
         assert SystemStatus.from_json({"systemState": raw}).panel_state is expected
 
 
+def test_second_named_preset_arms_then_counts_as_armed() -> None:
+    """The second preset moves tempo2 then partial2, like the first moves tempo1 then
+    partial1: the exit delay must keep a consumer polling, then the state must read armed."""
+    delay = SystemStatus.from_json({"systemState": "tempo2"})
+    assert delay.is_arming and not delay.is_armed
+    armed = SystemStatus.from_json({"systemState": "partial2"})
+    assert armed.is_armed and not armed.is_arming
+
+
+def test_maintenance_is_neither_armed_nor_arming() -> None:
+    status = SystemStatus.from_json({"systemState": "essai"})
+    assert PanelState.MAINTENANCE not in ARMED_PANEL_STATES
+    assert not status.is_armed and not status.is_arming
+    # The raw value still tells installation mode from test mode.
+    assert status.state == "essai"
+
+
+def test_empty_state_is_unknown_without_warning(caplog) -> None:
+    """The app has a case of its own for an empty state, so it is not a new value."""
+    _warn_unknown.cache_clear()
+    with caplog.at_level(logging.WARNING, logger="pydaitem.models"):
+        assert SystemStatus.from_json({}).panel_state is PanelState.UNKNOWN
+        assert SystemStatus.from_json({"systemState": ""}).panel_state is PanelState.UNKNOWN
+    assert caplog.text == ""
+
+
 def test_unknown_state_degrades_to_unknown_and_warns(caplog) -> None:
     """A state the library does not know must be visible, not silently absent.
 
-    This matters concretely: the triggered-alarm state has never been captured, so it will
+    This matters concretely: no raw value maps to the triggered-alarm state yet, so it will
     first reach us as an unknown value.
     """
     _warn_unknown.cache_clear()

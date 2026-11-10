@@ -5,13 +5,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from ._shared import dicts
 
-@dataclass(slots=True)
+
+@dataclass(slots=True, kw_only=True)
 class ScheduleProgram:
     """One recurring arm/disarm program.
 
-    Creating a new program was never observed on the live API and is not supported: only
-    an existing `id` can be updated. See `client.schedule.update_program`.
+    The façade only updates an existing `id`. Creating a program is
+    `client.schedule.add_program`.
     """
 
     id: int
@@ -22,7 +24,7 @@ class ScheduleProgram:
     command: bool
     """True arms, False disarms."""
     groups: list[int] = field(default_factory=list)
-    raw: dict[str, Any] = field(default_factory=dict)
+    raw: dict[str, Any] = field(default_factory=dict, repr=False)
 
     @classmethod
     def from_json(cls, data: dict[str, Any]) -> ScheduleProgram:
@@ -32,7 +34,9 @@ class ScheduleProgram:
             hour=data.get("hour", 0),
             minute=data.get("minute", 0),
             command=bool(data.get("command")),
-            groups=list(data.get("groups") or []),
+            groups=[g for g in data.get("groups") or [] if isinstance(g, int)]
+            if isinstance(data.get("groups"), list)
+            else [],
             raw=data,
         )
 
@@ -48,7 +52,7 @@ class ScheduleProgram:
         }
 
 
-@dataclass(slots=True)
+@dataclass(slots=True, kw_only=True)
 class Schedule:
     """The installation's full recurring arm/disarm schedule, from `/v5/systems/<id>/schedule`."""
 
@@ -56,13 +60,13 @@ class Schedule:
     """Master switch for the whole schedule, independent of each program."""
     programs: list[ScheduleProgram] = field(default_factory=list)
     max_program_count: int = 0
-    raw: dict[str, Any] = field(default_factory=dict)
+    raw: dict[str, Any] = field(default_factory=dict, repr=False)
 
     @classmethod
     def from_json(cls, data: dict[str, Any]) -> Schedule:
         return cls(
             global_activation=bool(data.get("globalActivation")),
-            programs=[ScheduleProgram.from_json(p) for p in data.get("programs") or []],
+            programs=[ScheduleProgram.from_json(p) for p in dicts(data.get("programs"))],
             max_program_count=data.get("maxProgramCount", 0),
             raw=data,
         )

@@ -1,7 +1,10 @@
 # Daitem Secure API reference
 
-Facts below describe the current behaviour of the API; anything not established is marked
-as such rather than guessed.
+This reference details 30 operations with their requests and answers. The
+[API map](api/README.md) adds every other call the mobile app can make, with its headers,
+models, error codes and retry rules. Its
+[openapi.yaml](api/openapi.yaml) is the machine-readable form of both: the operations
+described here carry `x-observed: true`.
 
 No real secret appears here: tokens, alarm codes, serial numbers and personal identifiers
 are replaced by `<...>` placeholders.
@@ -161,7 +164,7 @@ Consequences for a client:
 ### Whole system
 
 - `POST /topaze/v1/action/systems/<systemId>/sendSystemCommand`
-- **Arm**: `{"active": true}` — **Disarm**: `{"active": false}`
+- **Arm**: `{"active": true}`, **Disarm**: `{"active": false}`
 - **Response** (same schema as `/state`):
   ```json
   {"message":null,"systemState":"tempo","groups":[{"id":1,"active":true},{"id":2,"active":true}],
@@ -212,7 +215,7 @@ any device. Two distinct errors signal an unusable session, with the same remedy
 - `500 {"message":"status.nottmsessionid","details":"Failed to get last TTM session"}`:
   no session at all.
 - `500 {"message":"transmitter.error.invalidsessionid","details":"Invalid session id: <hex>"}`:
-  a session exists but its id is **stale** — the shape left by a previous session that ended
+  a session exists but its id is **stale**, the shape left by a previous session that ended
   without a clean `disconnect`.
 
 **App behaviour**: polls at roughly 1 Hz during a delay, until the state settles.
@@ -315,8 +318,8 @@ per group.
 - The mobile app sends `keepAlive` roughly every 8 minutes after `connect`.
 - Polling the state alone keeps the session alive without any `keepAlive` call: sessions
   stay open under a 60 s polling interval, stable for at least 20 minutes in that mode.
-- The idle timeout with no polling at all — how long an orphaned session blocks other
-  devices if a client stops without `disconnect` — is not documented here.
+- The idle timeout with no polling at all (how long an orphaned session blocks other
+  devices if a client stops without `disconnect`) is not documented here.
 
 ## 13. Alerts and notifications
 
@@ -384,7 +387,7 @@ Base `/topaze/v5/systems/<systemId>/notifications`.
    full `systemState`, so it can feed straight into a client's own state cache.
 3. **Delays**: poll fast (~1 Hz, like the app) while `tempo`/`tempogroup` runs, then return
    to a normal interval.
-4. **`409` handling**: treat it as retryable, not as a failure — keep any last known state
+4. **`409` handling**: treat it as retryable, not as a failure. Keep any last known state
    and retry rather than surfacing an error.
 
 Five-minute polling is a reasonable default for a panel like this: a `connect` -> read ->
@@ -396,7 +399,7 @@ so another device would rarely see a `409`.
 ## Known gaps
 
 - **Triggered state**: the `systemState` value and `openedIssueNumbers` contents during a
-  real alarm are not documented here — impractical to provoke safely.
+  real alarm are not documented here, being impractical to provoke safely.
 - **Schedule creation**: only `PUT`/`DELETE`/`activate` are documented; the `POST` shape for
   creating a new program is unknown.
 - **Logbook event decoding**: the i18n keys are resolved app-side from a Lokalise bundle,
@@ -411,5 +414,3 @@ so another device would rarely see a `409`.
 - Not legal advice. Accessing your own data on your own hardware with your own account is
   not automatically compliant with the Daitem terms of service.
 - A private API can change without notice. That fragility is structural.
-- The mapping from Daitem hardware to Diagral equivalents is an unsourced inference and
-  should not be relied on.

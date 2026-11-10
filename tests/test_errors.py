@@ -4,9 +4,8 @@ Responses are served from a test server rather than mocked, so the real network 
 exercised and no fragile mock dependency is needed (aioresponses 0.7.9 is incompatible
 with aiohttp 3.14).
 
-Every condition below was observed on the live API. Mapping them to distinct exceptions
-drives consumer behaviour: Home Assistant reacts differently to a busy session, a missing
-one, or a denied access.
+Mapping each condition below to a distinct exception drives consumer behaviour: Home
+Assistant reacts differently to a busy session, a missing one, or a denied access.
 """
 
 from __future__ import annotations
@@ -20,11 +19,19 @@ from aiohttp import web
 from aiohttp.test_utils import TestServer
 
 from pydaitem import (
+    CommandStatus,
+    DaitemApiError,
+    DaitemBadCodeError,
     DaitemClient,
+    DaitemCommandError,
     DaitemError,
     DaitemForbiddenError,
     DaitemNoSessionError,
+    DaitemRateLimitedError,
     DaitemSessionBusyError,
+    DaitemSessionRestrictedError,
+    DaitemTransmitterOfflineError,
+    Remedy,
 )
 
 SYSTEM_ID = 123456
@@ -32,6 +39,8 @@ STATE_PATH = f"/topaze/v5/systems/{SYSTEM_ID}/state"
 CONNECT_PATH = f"/topaze/v5/systems/{SYSTEM_ID}/connect"
 DISCONNECT_PATH = f"/topaze/v5/systems/{SYSTEM_ID}/disconnect"
 LOGBOOK_PATH = f"/topaze/v5/systems/{SYSTEM_ID}/logbook"
+KEEP_ALIVE_PATH = "/topaze/authenticate/keepAlive"
+COMMAND_PATH = f"/topaze/v1/action/systems/{SYSTEM_ID}/sendSystemCommand"
 
 
 def json_error(status: int, message: str, details: str | None = None) -> Callable:
@@ -108,14 +117,25 @@ async def test_session_already_open_raises_busy_error() -> None:
         with pytest.raises(DaitemSessionBusyError) as excinfo:
             await client.panel.connect(SYSTEM_ID, "0000")
         assert excinfo.value.holder == "owner"
+        assert excinfo.value.remedy is Remedy.RETRY_LATER
+        assert excinfo.value.placeholders == {"holder": "owner"}
+
+
+async def test_a_bare_403_on_connect_asks_for_the_code() -> None:
+    """Connect is open to every account: a refusal there is about the code, not a right."""
+    async for client in serve([("POST", CONNECT_PATH, json_error(403, "Access is denied"))]):
+        with pytest.raises(DaitemForbiddenError) as excinfo:
+            await client.panel.connect(SYSTEM_ID, "0000")
+        assert excinfo.value.remedy is Remedy.ASK_CODE
 
 
 async def test_forbidden_raises_forbidden_error() -> None:
     """403: owner-only resource, such as the logbook."""
     routes = [("POST", LOGBOOK_PATH, json_error(403, "Access is denied"))]
     async for client in serve(routes):
-        with pytest.raises(DaitemForbiddenError):
+        with pytest.raises(DaitemForbiddenError) as excinfo:
             await client._transport.request("POST", LOGBOOK_PATH)
+        assert excinfo.value.remedy is Remedy.NOT_PERMITTED
 
 
 async def test_unknown_error_stays_generic() -> None:
@@ -145,6 +165,7 @@ async def test_failed_disconnect_is_logged_not_raised(caplog: pytest.LogCaptureF
         with caplog.at_level(logging.DEBUG, logger="pydaitem.client"):
             async with client.panel.session(SYSTEM_ID, "0000"):
                 pass  # The block itself must not raise.
+            await client.panel.wait_released()
 
         assert "Could not release the panel session" in caplog.text
 
@@ -183,7 +204,15 @@ async def test_get_status_falls_back_to_connect() -> None:
 
     async def connect(_request: web.Request) -> web.Response:
         calls.append("connect")
-        return web.json_response({"ttmSessionId": "sess", "systemState": "off", "groups": []})
+        # The connect shape: the active group ids in `groups`, the groups in `groupList`.
+        return web.json_response(
+            {
+                "ttmSessionId": "sess",
+                "systemState": "on",
+                "groups": [1],
+                "groupList": [{"id": 1, "active": True}, {"id": 2, "active": False}],
+            }
+        )
 
     async def disconnect(_request: web.Request) -> web.Response:
         calls.append("disconnect")
@@ -196,9 +225,83 @@ async def test_get_status_falls_back_to_connect() -> None:
     ]
     async for client in serve(routes):
         status = await client.panel.get_status(SYSTEM_ID, "0000")
+        await client.panel.wait_released()
 
+        # The state connect answered with: reading it again would cost a round trip.
         assert status.state == "on"
         assert status.active_groups == [1]
-        # Proves the strategy: read, fall back to connect, re-read, release.
-        assert calls == ["state", "connect", "state", "disconnect"]
+        # Proves the strategy: read, fall back to connect, release.
+        assert calls == ["state", "connect", "disconnect"]
         assert client.panel.ttm_session_id is None
+
+
+@pytest.mark.parametrize(
+    ("status", "message", "expected"),
+    [
+        (500, "transmitter.connection.badpincode", DaitemBadCodeError),
+        (500, "transmitter.error.ttdisconnected", DaitemTransmitterOfflineError),
+        (500, "transmitter.connection.error", DaitemTransmitterOfflineError),
+        (500, "transmitter.connection.overlimit", DaitemRateLimitedError),
+        (500, "error.pool.full", DaitemRateLimitedError),
+        (500, "transmitter.error.accessforbidden", DaitemForbiddenError),
+        (403, "transmitter.connection.sessionrestricted", DaitemSessionRestrictedError),
+        # The message decides before the status: a 403 carrying a session code is a session
+        # error, as in the app.
+        (403, "status.nottmsessionid", DaitemNoSessionError),
+    ],
+)
+async def test_server_messages_raise_typed_errors(
+    status: int, message: str, expected: type[DaitemApiError]
+) -> None:
+    routes = [("POST", CONNECT_PATH, json_error(status, message, "detail text"))]
+    async for client in serve(routes):
+        with pytest.raises(expected) as excinfo:
+            await client.panel.connect(SYSTEM_ID, "0000")
+        assert type(excinfo.value) is expected
+        assert excinfo.value.status == status
+        assert excinfo.value.server_message == message
+        assert excinfo.value.details == "detail text"
+
+
+async def test_unknown_server_message_raises_api_error_with_what_it_said() -> None:
+    """A code with no typed exception still carries it, and stays a DaitemError."""
+    routes = [("POST", CONNECT_PATH, json_error(500, "zone.code.wrong.size", "6 digits"))]
+    async for client in serve(routes):
+        with pytest.raises(DaitemApiError) as excinfo:
+            await client.panel.connect(SYSTEM_ID, "0000")
+        assert type(excinfo.value) is DaitemApiError
+        assert isinstance(excinfo.value, DaitemError)
+        assert excinfo.value.server_message == "zone.code.wrong.size"
+
+
+async def test_forbidden_keep_alive_means_the_session_is_lost() -> None:
+    """The app reads a 403 on keep-alive as a lost session, not as a missing right."""
+    routes = [("POST", KEEP_ALIVE_PATH, json_error(403, "Access is denied"))]
+    async for client in serve(routes):
+        client._state.ttm_session_id = "sess"
+        with pytest.raises(DaitemNoSessionError):
+            await client.panel.keep_alive()
+
+
+@pytest.mark.parametrize(
+    ("command_status", "wording", "remedy"),
+    [
+        (CommandStatus.TIMEOUT, "may still have run", Remedy.CHECK_STATE),
+        (CommandStatus.UNKNOWN, "does not know this command", Remedy.FIX_CALL),
+        (CommandStatus.FORBIDDEN, "refused the command", Remedy.NOT_PERMITTED),
+        ("SOMETHING NEW", "command rejected", Remedy.CHECK_STATE),
+    ],
+)
+async def test_failed_command_status_says_what_happened(
+    command_status: str, wording: str, remedy: Remedy
+) -> None:
+    async def command(_request: web.Request) -> web.Response:
+        return web.json_response({"systemState": "off", "commandStatus": command_status})
+
+    async for client in serve([("POST", COMMAND_PATH, command)]):
+        with pytest.raises(DaitemCommandError) as excinfo:
+            await client.commands.arm(SYSTEM_ID)
+        assert excinfo.value.command_status == command_status
+        assert wording in str(excinfo.value)
+        assert excinfo.value.remedy is remedy
+        assert excinfo.value.placeholders == {"command_status": command_status}

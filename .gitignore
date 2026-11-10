@@ -21,3 +21,7 @@ credentials.json
 # named credentials.py, which silently drops them from the built package.
 *.token
 .daitem.token
+
+
+# Diagnostic dumps hold personal data
+daitem-dump*.json

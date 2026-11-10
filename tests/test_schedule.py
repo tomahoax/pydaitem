@@ -80,6 +80,7 @@ async def test_read_schedule_parses_programs_and_opens_a_session() -> None:
     ]
     async for system in serve(routes):
         result = await system.schedule.read()
+        await system.client.panel.wait_released()
         assert result.global_activation is True
         assert result.max_program_count == 50
         assert len(result.programs) == 1

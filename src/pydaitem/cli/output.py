@@ -4,8 +4,20 @@ from __future__ import annotations
 
 import json
 import sys
+import unicodedata
 from collections.abc import Sequence
 from typing import Any
+
+
+def _printable(text: str) -> str:
+    """`text` without control or format characters.
+
+    Names come from the server: an escape sequence or a carriage return in one could
+    rewrite what the terminal shows, a confirmation prompt included.
+    """
+    return "".join(
+        char if char == "\t" or unicodedata.category(char)[0] != "C" else "\ufffd" for char in text
+    )
 
 
 def _confirm(prompt: str, assume_yes: bool) -> bool:
@@ -24,7 +36,7 @@ def _confirm(prompt: str, assume_yes: bool) -> bool:
             file=sys.stderr,
         )
         return False
-    return input(f"{prompt} [y/N] ").strip().lower() in {"y", "yes"}
+    return input(f"{_printable(prompt)} [y/N] ").strip().lower() in {"y", "yes"}
 
 
 def _emit(payload: dict[str, Any], lines: Sequence[str], as_json: bool) -> None:
@@ -32,4 +44,4 @@ def _emit(payload: dict[str, Any], lines: Sequence[str], as_json: bool) -> None:
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
         for line in lines:
-            print(line)
+            print(_printable(line))

@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
+from ._shared import int_id
 
-@dataclass(slots=True)
+
+@dataclass(slots=True, kw_only=True)
 class System:
     """An installation the signed-in account can access."""
 
@@ -14,14 +16,16 @@ class System:
     name: str
     role: int
     vendor: str = ""
+    raw: dict[str, Any] = field(default_factory=dict, repr=False)
 
     @classmethod
     def from_json(cls, data: dict[str, Any]) -> System:
         return cls(
-            id=data["id"],
+            id=int_id(data["id"]),
             name=data.get("name") or "",
-            role=data.get("role", 0),
+            role=int(data.get("role") or 0),
             vendor=data.get("vendor") or "",
+            raw=data,
         )
 
     @property

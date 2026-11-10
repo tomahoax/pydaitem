@@ -1,0 +1,3833 @@
+# Daitem Secure API, as the app uses it: the single source of docs/api.
+# Edited by hand. tests/test_api_spec.py checks it is consistent, and
+# tests/test_api_spec_vs_library.py that pydaitem follows it.
+openapi: 3.0.3
+info:
+  title: Topaze API, as used by the Daitem Secure app
+  version: 6.0.3
+  description: 'Private, non-contractual API of the Daitem Secure iOS app 6.0.3 (build 2026091101).
+    Operations marked `x-observed` carry their notes in `x-observed-notes`; the narrative reference
+    for them is docs/api-daitem.md. `x-coverage` says how pydaitem reaches each operation: `facade`
+    through DaitemSystem, `client` on the low-level client only.'
+  x-retry-policy:
+    maxRetries: 2
+    delaySeconds: '0.5'
+    rules:
+    - when: HTTP 401
+      then: Refresh the Keycloak token, then retry (2 retries at most).
+    - when: HTTP 403 on keepAlive
+      then: 'The panel session is gone: start the session-lost flow, do not retry.'
+    - when: HTTP 403, 428, 500-599
+      then: Decode the error body and translate its message.
+    - when: Other failures
+      then: Retry after 0.5 s (2 retries at most), then give up.
+servers:
+- url: https://appv3.tt-monitor.com/topaze
+security:
+- keycloak:
+  - openid
+  appName: []
+tags:
+- name: auth
+  description: Sign-in and app session
+- name: panel
+  description: Panel session and state
+- name: commands
+  description: Alarm commands
+- name: inventory
+  description: Installation and devices
+- name: schedule
+  description: Arming schedule
+- name: automation
+  description: Automations (shutters, lights, gates)
+- name: scenarios
+  description: Scenarios
+- name: logbook
+  description: Event log
+- name: video
+  description: Cameras and video
+- name: notifications
+  description: Push, e-mail alerts and contacts
+- name: users
+  description: Users, codes and rights
+- name: misc
+  description: Widgets, upsell and feedback
+paths:
+  /auth:
+    get:
+      operationId: getAuth
+      tags:
+      - auth
+      summary: Authorization page (code flow with PKCE S256, scope openid)
+      description: client_id daitem-secure-app, redirect_uri daitemsecure://auth.
+      x-coverage: facade
+      responses:
+        '200':
+          $ref: '#/components/responses/OkUnmodelled'
+        default:
+          $ref: '#/components/responses/Error'
+      servers:
+      - url: https://auth.atraltech.com/realms/daitem/protocol/openid-connect
+      security: []
+      parameters: []
+  /token:
+    post:
+      operationId: postToken
+      tags:
+      - auth
+      summary: Exchange the code, or refresh the access token
+      description: Form-encoded. The app keeps accessToken, refreshToken, expiresIn and refreshExpiresIn.
+      x-coverage: facade
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SsoAuthToken'
+        default:
+          $ref: '#/components/responses/Error'
+      servers:
+      - url: https://auth.atraltech.com/realms/daitem/protocol/openid-connect
+      security: []
+      parameters: []
+  /logout:
+    post:
+      operationId: postLogout
+      tags:
+      - auth
+      summary: Close the Keycloak session
+      x-coverage: facade
+      responses:
+        '200':
+          $ref: '#/components/responses/OkUnmodelled'
+        default:
+          $ref: '#/components/responses/Error'
+      servers:
+      - url: https://auth.atraltech.com/realms/daitem/protocol/openid-connect
+      security: []
+      parameters: []
+  /v1/user:
+    parameters:
+    - $ref: '#/components/parameters/SessionId'
+    - $ref: '#/components/parameters/Vendor'
+    get:
+      operationId: getV1User
+      tags:
+      - auth
+      summary: Signed-in user (id used by the widget endpoints)
+      x-coverage: facade
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TopazeAuthUserInfo'
+        default:
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      x-observed: true
+  /authenticate/logout:
+    parameters:
+    - $ref: '#/components/parameters/SessionId'
+    - $ref: '#/components/parameters/Vendor'
+    post:
+      operationId: postAuthenticateLogout
+      tags:
+      - auth
+      summary: Log the app out of Topaze
+      description: The body carries the id token twice, as idToken and id_token.
+      x-coverage: client
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TopazeLogoutRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkUnmodelled'
+        default:
+          $ref: '#/components/responses/Error'
+  /v2/authenticate/logout:
+    parameters:
+    - $ref: '#/components/parameters/SessionId'
+    post:
+      operationId: postV2AuthenticateLogout
+      tags:
+      - auth
+      summary: Log out, newer variant
+      x-coverage: client
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TopazeLogoutRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkUnmodelled'
+        default:
+          $ref: '#/components/responses/Error'
+  /authenticate/keepAlive:
+    parameters:
+    - $ref: '#/components/parameters/SessionId'
+    post:
+      operationId: postAuthenticateKeepAlive
+      tags:
+      - panel
+      summary: Keep the panel session open
+      description: 'Optional for a client: a state read also keeps the session alive.'
+      x-coverage: facade
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TopazeTokens'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkUnmodelled'
+        default:
+          $ref: '#/components/responses/Error'
+      x-observed: true
+      x-observed-notes: 'The only place the `ttmSessionId` returned by `connect` is reused. Optional in
+
+        practice: polling the state alone holds the session for at least 20 minutes without
+
+        any keepAlive. The mobile app sends one roughly every 8 minutes.'
+  /v5/systems:
+    parameters:
+    - $ref: '#/components/parameters/SessionId'
+    get:
+      operationId: getV5Systems
+      tags:
+      - panel
+      summary: Installations of the account
+      x-coverage: facade
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TopazeSystem'
+        default:
+          $ref: '#/components/responses/Error'
+      x-observed: true
+      x-observed-notes: 'There is no "select" endpoint: selection is client-side. Pick an `id` and reuse
+        it
+
+        as `systemId` in every later call.'
+  /v5/systems/{systemId}/connect:
+    parameters:
+    - $ref: '#/components/parameters/SystemId'
+    - $ref: '#/components/parameters/SessionId'
+    - $ref: '#/components/parameters/Vendor'
+    - $ref: '#/components/parameters/ForwardedFor'
+    post:
+      operationId: postV5SystemsSystemIdConnect
+      tags:
+      - panel
+      summary: Open the panel session with the user's code
+      description: One session at a time across all accounts. Returns ttmSessionId, groups, rights and
+        versions.
+      x-coverage: facade
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TopazeConnectCredentials'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TopazeConnectResult'
+        default:
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/SessionBusy'
+      x-observed: true
+      x-observed-notes: 'Requires the alarm code **of the account being used**, which is not necessarily
+        the
+
+        owner''s master code: a restricted user has their own.
+
+
+        This is the only operation that also requires the `X-App-Version` header.'
+  /v5/systems/{systemId}/connect/{transactionId}:
+    parameters:
+    - $ref: '#/components/parameters/SystemId'
+    - $ref: '#/components/parameters/TransactionId'
+    - $ref: '#/components/parameters/SessionId'
+    - $ref: '#/components/parameters/Vendor'
+    get:
+      operationId: getV5SystemsSystemIdConnectTransactionId
+      tags:
+      - panel
+      summary: Poll a connect that answered asynchronously
+      description: status PENDING until DONE. pydaitem polls it when connect answers without a session
+        id.
+      x-coverage: facade
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TopazeAsyncResponseConnectResult'
+        default:
+          $ref: '#/components/responses/Error'
+  /v5/systems/{systemId}/disconnect:
+    parameters:
+    - $ref: '#/components/parameters/SystemId'
+    - $ref: '#/components/parameters/SessionId'
+    post:
+      operationId: postV5SystemsSystemIdDisconnect
+      tags:
+      - panel
+      summary: Release the panel session
+      x-coverage: facade
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TopazeDisconnect'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TopazeDisconnectResult'
+        default:
+          $ref: '#/components/responses/Error'
+      x-observed: true
+      x-observed-notes: The body is required; without it the API answers `400 bad request body`.
+  /v5/systems/{systemId}/state:
+    parameters:
+    - $ref: '#/components/parameters/SystemId'
+    - $ref: '#/components/parameters/SessionId'
+    get:
+      operationId: getV5SystemsSystemIdState
+      tags:
+      - panel
+      summary: Panel state, groups and open faults
+      x-coverage: facade
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TopazeSystemStateResult'
+        default:
+          $ref: '#/components/responses/Error'
+        '500':
+          $ref: '#/components/responses/NoSession'
+      x-observed: true
+      x-observed-notes: 'Requires an existing panel session, held by any device. Two distinct `500`
+
+        responses mean "no usable session", both remedied by `connect`:
+
+        `status.nottmsessionid` (none at all) and `transmitter.error.invalidsessionid`
+
+        (one exists but its id is stale).'
+  /installation/isConnected:
+    parameters:
+    - $ref: '#/components/parameters/SessionId'
+    post:
+      operationId: postInstallationIsConnected
+      tags:
+      - panel
+      summary: Whether the transmitter is online
+      description: Connectivity sensor that needs no panel session. transmitterId comes from getConfiguration.
+      x-coverage: facade
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TopazeIsConnectedInput'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TopazeIsConnectedOutput'
+        default:
+          $ref: '#/components/responses/Error'
+      x-observed: true
+  /v5/systems/{systemId}/switchMode/{command}:
+    parameters:
+    - $ref: '#/components/parameters/SystemId'
+    - name: command
+      in: path
+      required: true
+      schema:
+        type: string
+    - $ref: '#/components/parameters/SessionId'
+    post:
+      operationId: postV5SystemsSystemIdSwitchModeCommand
+      tags:
+      - panel
+      summary: Switch the panel to installation, test or use
+      description: command is one of SwitchModeCommand. Installer territory, not for automation.
+      x-coverage: client
+      responses:
+        '200':
+          $ref: '#/components/responses/OkUnmodelled'
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/action/systems/{systemId}/sendSystemCommand:
+    parameters:
+    - $ref: '#/components/parameters/SystemId'
+    - $ref: '#/components/parameters/SessionId'
+    post:
+      operationId: postV1ActionSystemsSystemIdSendSystemCommand
+      tags:
+      - commands
+      summary: Arm or disarm everything
+      x-coverage: facade
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TopazeSendSystemActivationCommandRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TopazeSystemStateResult'
+        default:
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/SessionBusy'
+      x-observed: true
+      x-observed-notes: '**Drives a real alarm.** Arming returns `tempo` first, then settles on `on` once
+
+        the exit delay elapses. Disarming returns `off` immediately.'
+  /v1/action/systems/{systemId}/sendGroupCommand:
+    parameters:
+    - $ref: '#/components/parameters/SystemId'
+    - $ref: '#/components/parameters/SessionId'
+    post:
+      operationId: postV1ActionSystemsSystemIdSendGroupCommand
+      tags:
+      - commands
+      summary: Arm or disarm chosen groups
+      description: pydaitem arm_groups. Could become one switch per group.
+      x-coverage: facade
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TopazeSendGroupCommandRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TopazeSystemStateResult'
+        default:
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/SessionBusy'
+      x-observed: true
+      x-observed-notes: '**Drives a real alarm.** The finest-grained primitive: several groups can be
+        driven
+
+        in one call. Arming returns `tempogroup` then `group`; disarming returns `off` with
+
+        no delay.'
+  /v1/action/systems/{systemId}/startPartialArmingWidgetCommand/{partialItemId}:
+    parameters:
+    - $ref: '#/components/parameters/SystemId'
+    - name: partialItemId
+      in: path
+      required: true
+      schema:
+        type: string
+    - $ref: '#/components/parameters/SessionId'
+    post:
+      operationId: postV1ActionSystemsSystemIdStartPartialArmingWidgetCommandPartialItemId
+      tags:
+      - commands
+      summary: Start a partial arming preset
+      description: 'Preset ids come from the partial arming widget: partial_arming_name_presence, _1 and
+        _2.'
+      x-coverage: facade
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TopazeSystemStateResult'
+        default:
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/SessionBusy'
+      x-observed: true
+      x-observed-notes: '**Drives a real alarm.** Takes no body. Returns `systemState: presence`.'
+  /v1/action/systems/{systemId}/startAlertWidgetCommand/{alertId}:
+    parameters:
+    - $ref: '#/components/parameters/SystemId'
+    - name: alertId
+      in: path
+      required: true
+      schema:
+        type: string
+    - $ref: '#/components/parameters/SessionId'
+    post:
+      operationId: postV1ActionSystemsSystemIdStartAlertWidgetCommandAlertId
+      tags:
+      - commands
+      summary: Trigger an alert (audible, silent or fire)
+      description: Panic button. Expose only behind a confirmation, if at all.
+      x-coverage: client
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TopazeSystemStateResult'
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/action/systems/{systemId}/startScenarioWidgetCommand/{scenarioId}:
+    parameters:
+    - $ref: '#/components/parameters/SystemId'
+    - $ref: '#/components/parameters/ScenarioId'
+    - $ref: '#/components/parameters/SessionId'
+    post:
+      operationId: postV1ActionSystemsSystemIdStartScenarioWidgetCommandScenarioId
+      tags:
+      - commands
+      summary: Run a scenario
+      description: One scenario per entry, each runnable on its own.
+      x-coverage: facade
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TopazeSystemStateResult'
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/action/systems/{systemId}/sendAutomationWidgetCommand:
+    parameters:
+    - $ref: '#/components/parameters/SystemId'
+    - $ref: '#/components/parameters/SessionId'
+    post:
+      operationId: postV1ActionSystemsSystemIdSendAutomationWidgetCommand
+      tags:
+      - automation
+      summary: Drive an automation from its widget
+      x-coverage: client
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TopazeSendAutomationCommandRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkUnmodelled'
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/systems/{systemId}/actions/sendPpmsCommand:
+    parameters:
+    - $ref: '#/components/parameters/SystemId'
+    - $ref: '#/components/parameters/SessionId'
+    post:
+      operationId: postV1SystemsSystemIdActionsSendPpmsCommand
+      tags:
+      - commands
+      summary: Start or stop a safety plan alert (attack, natural hazard)
+      description: Professional sites only (PPMS).
+      x-coverage: client
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TopazeSendPpmsCommandRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkUnmodelled'
+        default:
+          $ref: '#/components/responses/Error'
+  /v2/systems/{systemId}/configuration:
+    parameters:
+    - $ref: '#/components/parameters/SystemId'
+    - $ref: '#/components/parameters/SessionId'
+    - $ref: '#/components/parameters/AppPlatform'
+    get:
+      operationId: getV2SystemsSystemIdConfiguration
+      tags:
+      - inventory
+      summary: 'Full inventory: panel, detectors, sirens, keypads'
+      x-coverage: facade
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TopazeConfiguration'
+        default:
+          $ref: '#/components/responses/Error'
+      x-observed: true
+      x-observed-notes: 'Identity, group, inhibition and **faults** for every device.
+
+
+        The API exposes **no live open/closed detector state**, and `type` is `DEFAULT` for
+
+        every detector, so door, window and motion sensors cannot be told apart other than
+
+        by the user-assigned name.'
+  /v1/systems/{systemId}/products/{serialNumber}:
+    parameters:
+    - $ref: '#/components/parameters/SystemId'
+    - name: serialNumber
+      in: path
+      required: true
+      schema:
+        type: string
+    - $ref: '#/components/parameters/SessionId'
+    patch:
+      operationId: patchV1SystemsSystemIdProductsSerialNumber
+      tags:
+      - inventory
+      summary: Inhibit or restore a device
+      description: A switch per inhibitable device (isInhibitable in the inventory).
+      x-coverage: client
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TopazeUpdateProductRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkUnmodelled'
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/systems/{systemId}/updateFirmware:
+    parameters:
+    - $ref: '#/components/parameters/SystemId'
+    - $ref: '#/components/parameters/SessionId'
+    post:
+      operationId: postV1SystemsSystemIdUpdateFirmware
+      tags:
+      - inventory
+      summary: Start a firmware update
+      description: 'The inventory already lists current and latest versions: an update entity is possible.'
+      x-coverage: client
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TopazeFirmwareUpdateRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TopazeFirmwareUpdateStatusResponse'
+        default:
+          $ref: '#/components/responses/Error'
+  /v5/configuration:
+    parameters:
+    - $ref: '#/components/parameters/SessionId'
+    get:
+      operationId: getV5Configuration
+      tags:
+      - inventory
+      summary: Countries offered by the app
+      x-coverage: client
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TopazeEdaitemConfiguration'
+        default:
+          $ref: '#/components/responses/Error'
+  /configuration/getConfiguration:
+    parameters:
+    - $ref: '#/components/parameters/SessionId'
+    post:
+      operationId: postConfigurationGetConfiguration
+      tags:
+      - inventory
+      summary: Installation record by role and id
+      description: Gives transmitterId and gprsPhone.
+      x-coverage: facade
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TopazeGetConfigurationInput'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TopazeConfigurationData'
+        default:
+          $ref: '#/components/responses/Error'
+      x-observed: true
+      x-observed-notes: Returns the panel and transmitter hardware identifiers.
+  /v5/systems/{systemId}/name:
+    parameters:
+    - $ref: '#/components/parameters/SystemId'
+    - $ref: '#/components/parameters/SessionId'
+    put:
+      operationId: putV5SystemsSystemIdName
+      tags:
+      - inventory
+      summary: Rename the installation
+      x-coverage: client
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TopazeModifySystemName'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkUnmodelled'
+        default:
+          $ref: '#/components/responses/Error'
+  /v5/systems/{systemId}/gprs-phone-number:
+    parameters:
+    - $ref: '#/components/parameters/SystemId'
+    - $ref: '#/components/parameters/SessionId'
+    put:
+      operationId: putV5SystemsSystemIdGprsPhoneNumber
+      tags:
+      - inventory
+      summary: Set the GPRS transmitter phone number
+      x-coverage: client
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TopazeUpdateGPRSPhoneRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkUnmodelled'
+        default:
+          $ref: '#/components/responses/Error'
+  /v5/systems/{systemId}/schedule:
+    parameters:
+    - $ref: '#/components/parameters/SystemId'
+    - $ref: '#/components/parameters/SessionId'
+    get:
+      operationId: getV5SystemsSystemIdSchedule
+      tags:
+      - schedule
+      summary: Arming schedule
+      x-coverage: facade
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TopazeSystemScheduleConfiguration'
+        default:
+          $ref: '#/components/responses/Error'
+      x-observed: true
+    post:
+      operationId: postV5SystemsSystemIdSchedule
+      tags:
+      - schedule
+      summary: Add a program
+      x-coverage: client
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TopazeOnOffProgram'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkUnmodelled'
+        default:
+          $ref: '#/components/responses/Error'
+  /v5/systems/{systemId}/schedule/{scheduleId}:
+    parameters:
+    - $ref: '#/components/parameters/SystemId'
+    - name: scheduleId
+      in: path
+      required: true
+      schema:
+        type: string
+    - $ref: '#/components/parameters/SessionId'
+    put:
+      operationId: putV5SystemsSystemIdScheduleScheduleId
+      tags:
+      - schedule
+      summary: Change a program
+      x-coverage: facade
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TopazeOnOffProgram'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkUnmodelled'
+        default:
+          $ref: '#/components/responses/Error'
+      x-observed: true
+    delete:
+      operationId: deleteV5SystemsSystemIdScheduleScheduleId
+      tags:
+      - schedule
+      summary: Delete a program
+      x-coverage: facade
+      responses:
+        '200':
+          $ref: '#/components/responses/OkUnmodelled'
+        default:
+          $ref: '#/components/responses/Error'
+      x-observed: true
+  /v5/systems/{systemId}/schedule/activate:
+    parameters:
+    - $ref: '#/components/parameters/SystemId'
+    - $ref: '#/components/parameters/SessionId'
+    put:
+      operationId: putV5SystemsSystemIdScheduleActivate
+      tags:
+      - schedule
+      summary: Turn the schedule on or off
+      description: A natural switch entity.
+      x-coverage: facade
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TopazeScheduleActivationRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkUnmodelled'
+        default:
+          $ref: '#/components/responses/Error'
+      x-observed: true
+  /v5/systems/{systemId}/automatisms:
+    parameters:
+    - $ref: '#/components/parameters/SystemId'
+    - $ref: '#/components/parameters/SessionId'
+    get:
+      operationId: getV5SystemsSystemIdAutomatisms
+      tags:
+      - automation
+      summary: Shutters, gates, garage doors, lights, plugs
+      description: Maps to cover, light and switch entities, with their current state and position.
+      x-coverage: facade
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TopazeAutomatismListResponse'
+        default:
+          $ref: '#/components/responses/Error'
+      x-observed: true
+  /v5/systems/{systemId}/automatisms/{automatismId}/command:
+    parameters:
+    - $ref: '#/components/parameters/SystemId'
+    - name: automatismId
+      in: path
+      required: true
+      schema:
+        type: integer
+    - $ref: '#/components/parameters/SessionId'
+    post:
+      operationId: postV5SystemsSystemIdAutomatismsAutomatismIdCommand
+      tags:
+      - automation
+      summary: Drive an automation
+      description: type from availableCommands; position for POSITION.
+      x-coverage: facade
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SendCommandRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkUnmodelled'
+        default:
+          $ref: '#/components/responses/Error'
+  /v6/systems/{systemId}/scenarios:
+    parameters:
+    - $ref: '#/components/parameters/SystemId'
+    - $ref: '#/components/parameters/SessionId'
+    get:
+      operationId: getV6SystemsSystemIdScenarios
+      tags:
+      - scenarios
+      summary: Scenarios
+      x-coverage: facade
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TopazeScenarioListResponse'
+        default:
+          $ref: '#/components/responses/Error'
+      x-observed: true
+    post:
+      operationId: postV6SystemsSystemIdScenarios
+      tags:
+      - scenarios
+      summary: Create a scenario
+      x-coverage: client
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TopazeNewScenario'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkUnmodelled'
+        default:
+          $ref: '#/components/responses/Error'
+  /v6/systems/{systemId}/scenarios/{scenarioId}:
+    parameters:
+    - $ref: '#/components/parameters/SystemId'
+    - $ref: '#/components/parameters/ScenarioId'
+    - $ref: '#/components/parameters/SessionId'
+    put:
+      operationId: putV6SystemsSystemIdScenariosScenarioId
+      tags:
+      - scenarios
+      summary: Change a scenario (or toggle active)
+      description: Toggling active could be a switch; the body is the whole scenario.
+      x-coverage: client
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TopazeScenario'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkUnmodelled'
+        default:
+          $ref: '#/components/responses/Error'
+    delete:
+      operationId: deleteV6SystemsSystemIdScenariosScenarioId
+      tags:
+      - scenarios
+      summary: Delete a scenario
+      x-coverage: client
+      responses:
+        '200':
+          $ref: '#/components/responses/OkUnmodelled'
+        default:
+          $ref: '#/components/responses/Error'
+  /v6/systems/{systemId}/scenarios/templates:
+    parameters:
+    - $ref: '#/components/parameters/SystemId'
+    - $ref: '#/components/parameters/SessionId'
+    get:
+      operationId: getV6SystemsSystemIdScenariosTemplates
+      tags:
+      - scenarios
+      summary: Scenario templates
+      x-coverage: client
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TopazeTemplateScenarioListResponse'
+        default:
+          $ref: '#/components/responses/Error'
+  /v6/systems/{systemId}/scenarios/actions:
+    parameters:
+    - $ref: '#/components/parameters/SystemId'
+    - $ref: '#/components/parameters/SessionId'
+    get:
+      operationId: getV6SystemsSystemIdScenariosActions
+      tags:
+      - scenarios
+      summary: Actions a scenario may use
+      x-coverage: client
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TopazeScenarioAvailableActionListResponse'
+        default:
+          $ref: '#/components/responses/Error'
+      x-observed: true
+      x-observed-notes: 'Confirms two partial presets alongside the presence mode. `PARTIAL_START_1` and
+
+        `PARTIAL_START_2` correspond to `startPartialArmingWidgetCommand/0` and `/1`.'
+  /v5/systems/{systemId}/scenarios/configuration:
+    parameters:
+    - $ref: '#/components/parameters/SystemId'
+    - $ref: '#/components/parameters/SessionId'
+    get:
+      operationId: getV5SystemsSystemIdScenariosConfiguration
+      tags:
+      - scenarios
+      summary: Scenario limits and triggers
+      x-coverage: client
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TopazeScenarioConfiguration'
+        default:
+          $ref: '#/components/responses/Error'
+      x-observed: true
+  /v5/systems/{systemId}/logbook:
+    parameters:
+    - $ref: '#/components/parameters/SystemId'
+    - $ref: '#/components/parameters/SessionId'
+    post:
+      operationId: postV5SystemsSystemIdLogbook
+      tags:
+      - logbook
+      summary: Ask the panel for its event log (asynchronous)
+      description: Answers with a job location; owner accounts only.
+      x-coverage: facade
+      responses:
+        '200':
+          $ref: '#/components/responses/OkUnmodelled'
+        default:
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+      x-observed: true
+      x-observed-notes: 'Asynchronous job. **The job id is returned in the `Location` response header**,
+        not
+
+        in the body, as `/v5/systems/{systemId}/logbook/{jobId}` without the `/topaze`
+
+        prefix. Poll the job until `request_status_done`.
+
+
+        **Owner-only**: a restricted account receives `403`.'
+  /v5/systems/{systemId}/logbook/{transactionId}:
+    parameters:
+    - $ref: '#/components/parameters/SystemId'
+    - $ref: '#/components/parameters/TransactionId'
+    - $ref: '#/components/parameters/SessionId'
+    get:
+      operationId: getV5SystemsSystemIdLogbookTransactionId
+      tags:
+      - logbook
+      summary: Fetch the event log job
+      description: Owner accounts only. A client can turn it into an event history.
+      x-coverage: facade
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TopazeLogbookResponse'
+        default:
+          $ref: '#/components/responses/Error'
+      x-observed: true
+  /v1/systems/{systemId}/cameras:
+    parameters:
+    - $ref: '#/components/parameters/SystemId'
+    - $ref: '#/components/parameters/SessionId'
+    get:
+      operationId: getV1SystemsSystemIdCameras
+      tags:
+      - video
+      summary: Cameras
+      description: Live video goes through the Dahua SDK bundled with the app, not through Topaze.
+      x-coverage: facade
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TopazeCameraListResponse'
+        default:
+          $ref: '#/components/responses/Error'
+      x-observed: true
+  /v6/systems/{systemId}/videos:
+    parameters:
+    - $ref: '#/components/parameters/SystemId'
+    - $ref: '#/components/parameters/SessionId'
+    get:
+      operationId: getV6SystemsSystemIdVideos
+      tags:
+      - video
+      summary: Recorded clips (alarm, on demand, archive)
+      description: 'Detectors with image capture record clips on alarm: an image or media source is possible.'
+      x-coverage: facade
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TopazeVideoListResponse'
+        default:
+          $ref: '#/components/responses/Error'
+      x-observed: true
+  /v5/systems/{systemId}/videos/{deviceType}/{deviceUid}/{filmId}/mpeg4:
+    parameters:
+    - $ref: '#/components/parameters/SystemId'
+    - name: deviceType
+      in: path
+      required: true
+      schema:
+        type: string
+    - name: deviceUid
+      in: path
+      required: true
+      schema:
+        type: string
+    - name: filmId
+      in: path
+      required: true
+      schema:
+        type: string
+    - $ref: '#/components/parameters/SessionId'
+    get:
+      operationId: getV5SystemsSystemIdVideosDeviceTypeDeviceUidFilmIdMpeg4
+      tags:
+      - video
+      summary: Download a clip as MP4
+      description: deviceType is DETECTOR, CAMERA or ARCHIVE.
+      x-coverage: client
+      responses:
+        '200':
+          description: MP4 clip
+          content:
+            video/mp4:
+              schema:
+                type: string
+                format: binary
+        default:
+          $ref: '#/components/responses/Error'
+  /v5/systems/{systemId}/videos/{deviceType}/{deviceUid}/{filmId}:
+    parameters:
+    - $ref: '#/components/parameters/SystemId'
+    - name: deviceType
+      in: path
+      required: true
+      schema:
+        type: string
+    - name: deviceUid
+      in: path
+      required: true
+      schema:
+        type: string
+    - name: filmId
+      in: path
+      required: true
+      schema:
+        type: string
+    - $ref: '#/components/parameters/SessionId'
+    delete:
+      operationId: deleteV5SystemsSystemIdVideosDeviceTypeDeviceUidFilmId
+      tags:
+      - video
+      summary: Delete a clip
+      x-coverage: client
+      responses:
+        '200':
+          $ref: '#/components/responses/OkUnmodelled'
+        default:
+          $ref: '#/components/responses/Error'
+  /v5/systems/{systemId}/videos/capture/carir/{carirId}:
+    parameters:
+    - $ref: '#/components/parameters/SystemId'
+    - name: carirId
+      in: path
+      required: true
+      schema:
+        type: string
+    - $ref: '#/components/parameters/SessionId'
+    - $ref: '#/components/parameters/ForwardedFor'
+    post:
+      operationId: postV5SystemsSystemIdVideosCaptureCarirCarirId
+      tags:
+      - video
+      summary: Ask a capture detector for a clip now (asynchronous)
+      x-coverage: client
+      responses:
+        '200':
+          $ref: '#/components/responses/OkUnmodelled'
+        default:
+          $ref: '#/components/responses/Error'
+  /v5/systems/{systemId}/videos/capture/carir/{carirId}/{transactionId}:
+    parameters:
+    - $ref: '#/components/parameters/SystemId'
+    - name: carirId
+      in: path
+      required: true
+      schema:
+        type: string
+    - $ref: '#/components/parameters/TransactionId'
+    - $ref: '#/components/parameters/SessionId'
+    get:
+      operationId: getV5SystemsSystemIdVideosCaptureCarirCarirIdTransactionId
+      tags:
+      - video
+      summary: Poll a capture request
+      x-coverage: client
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TopazeAsyncResponse'
+        default:
+          $ref: '#/components/responses/Error'
+  /v5/systems/{systemId}/notifications:
+    parameters:
+    - $ref: '#/components/parameters/SystemId'
+    - $ref: '#/components/parameters/SessionId'
+    post:
+      operationId: postV5SystemsSystemIdNotifications
+      tags:
+      - notifications
+      summary: Register this phone for push
+      description: Push goes through the app's push service, which a third-party client cannot receive.
+      x-coverage: client
+      parameters:
+      - $ref: '#/components/parameters/Vendor'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TopazeRegisterBySystemRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkUnmodelled'
+        default:
+          $ref: '#/components/responses/Error'
+      x-observed: true
+    delete:
+      operationId: deleteV5SystemsSystemIdNotifications
+      tags:
+      - notifications
+      summary: Unregister this phone
+      x-coverage: client
+      parameters:
+      - $ref: '#/components/parameters/Vendor'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TopazeUnRegisterDeviceBySystemRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkUnmodelled'
+        default:
+          $ref: '#/components/responses/Error'
+    get:
+      operationId: getV5SystemsSystemIdNotifications
+      tags:
+      - notifications
+      summary: Who is alerted, by mail and push
+      x-coverage: client
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TopazeNotificationReceiver'
+        default:
+          $ref: '#/components/responses/Error'
+      x-observed: true
+      x-observed-notes: Contains personal data.
+  /v5/systems/{systemId}/notifications/registered:
+    parameters:
+    - $ref: '#/components/parameters/SystemId'
+    - name: pnsHandle
+      in: query
+      required: true
+      schema:
+        type: string
+    - $ref: '#/components/parameters/SessionId'
+    - $ref: '#/components/parameters/Vendor'
+    get:
+      operationId: getV5SystemsSystemIdNotificationsRegistered
+      tags:
+      - notifications
+      summary: Whether this phone is registered
+      description: Query parameter pnsHandle (the push token).
+      x-coverage: client
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TopazeIsDeviceRegisterResponse'
+        default:
+          $ref: '#/components/responses/Error'
+      x-observed: true
+  /v5/systems/{systemId}/notifications/{receiverId}:
+    parameters:
+    - $ref: '#/components/parameters/SystemId'
+    - name: receiverId
+      in: path
+      required: true
+      schema:
+        type: string
+    - $ref: '#/components/parameters/SessionId'
+    put:
+      operationId: putV5SystemsSystemIdNotificationsReceiverId
+      tags:
+      - notifications
+      summary: Change one receiver's alerts
+      x-coverage: client
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TopazeNotificationReceiver'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkUnmodelled'
+        default:
+          $ref: '#/components/responses/Error'
+      x-observed: true
+  /v5/systems/{systemId}/notifications/all:
+    parameters:
+    - $ref: '#/components/parameters/SystemId'
+    - $ref: '#/components/parameters/SessionId'
+    delete:
+      operationId: deleteV5SystemsSystemIdNotificationsAll
+      tags:
+      - notifications
+      summary: Remove every registration
+      x-coverage: client
+      responses:
+        '200':
+          $ref: '#/components/responses/OkUnmodelled'
+        default:
+          $ref: '#/components/responses/Error'
+  /v5/systems/{systemId}/contacts:
+    parameters:
+    - $ref: '#/components/parameters/SystemId'
+    - $ref: '#/components/parameters/SessionId'
+    post:
+      operationId: postV5SystemsSystemIdContacts
+      tags:
+      - notifications
+      summary: Add an alert contact
+      x-coverage: client
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TopazeCreateContact'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkUnmodelled'
+        default:
+          $ref: '#/components/responses/Error'
+  /v5/systems/{systemId}/contacts/{contactId}:
+    parameters:
+    - $ref: '#/components/parameters/SystemId'
+    - name: contactId
+      in: path
+      required: true
+      schema:
+        type: string
+    - $ref: '#/components/parameters/SessionId'
+    put:
+      operationId: putV5SystemsSystemIdContactsContactId
+      tags:
+      - notifications
+      summary: Change an alert contact
+      x-coverage: client
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TopazeModifyContact'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkUnmodelled'
+        default:
+          $ref: '#/components/responses/Error'
+    delete:
+      operationId: deleteV5SystemsSystemIdContactsContactId
+      tags:
+      - notifications
+      summary: Remove an alert contact
+      x-coverage: client
+      responses:
+        '200':
+          $ref: '#/components/responses/OkUnmodelled'
+        default:
+          $ref: '#/components/responses/Error'
+  /v5/systems/{systemId}/users:
+    parameters:
+    - $ref: '#/components/parameters/SystemId'
+    - $ref: '#/components/parameters/SessionId'
+    get:
+      operationId: getV5SystemsSystemIdUsers
+      tags:
+      - users
+      summary: Owner, restricted users, installer, service codes
+      x-coverage: client
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TopazeUserListConfigurationResponse'
+        default:
+          $ref: '#/components/responses/Error'
+      x-observed: true
+      x-observed-notes: Contains personal data (postal address, third-party email addresses).
+  /v5/systems/{systemId}/installer/access:
+    parameters:
+    - $ref: '#/components/parameters/SystemId'
+    - $ref: '#/components/parameters/SessionId'
+    get:
+      operationId: getV5SystemsSystemIdInstallerAccess
+      tags:
+      - users
+      summary: Installer remote access level
+      description: Answers one of InstallerAccess.
+      x-coverage: client
+      responses:
+        '200':
+          $ref: '#/components/responses/OkUnmodelled'
+        default:
+          $ref: '#/components/responses/Error'
+  /v5/systems/{systemId}/installer/access/{access}:
+    parameters:
+    - $ref: '#/components/parameters/SystemId'
+    - name: access
+      in: path
+      required: true
+      schema:
+        type: string
+    - $ref: '#/components/parameters/SessionId'
+    put:
+      operationId: putV5SystemsSystemIdInstallerAccessAccess
+      tags:
+      - users
+      summary: Change installer remote access
+      x-coverage: client
+      responses:
+        '200':
+          $ref: '#/components/responses/OkUnmodelled'
+        default:
+          $ref: '#/components/responses/Error'
+  /v5/systems/{systemId}/code/{codeId}:
+    parameters:
+    - $ref: '#/components/parameters/SystemId'
+    - name: codeId
+      in: path
+      required: true
+      schema:
+        type: string
+    - $ref: '#/components/parameters/SessionId'
+    get:
+      operationId: getV5SystemsSystemIdCodeCodeId
+      tags:
+      - users
+      summary: Read an access code
+      description: 'Never needed by a client: the user gives their own code.'
+      x-coverage: client
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TopazeSystemCode'
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/systems/{systemId}/users/restricted:
+    parameters:
+    - $ref: '#/components/parameters/SystemId'
+    - $ref: '#/components/parameters/SessionId'
+    post:
+      operationId: postV1SystemsSystemIdUsersRestricted
+      tags:
+      - users
+      summary: Create a restricted user
+      x-coverage: client
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TopazeCreateRestrictedUserRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkUnmodelled'
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/systems/{systemId}/users/{userId}/email:
+    parameters:
+    - $ref: '#/components/parameters/SystemId'
+    - $ref: '#/components/parameters/UserId'
+    - $ref: '#/components/parameters/SessionId'
+    put:
+      operationId: putV1SystemsSystemIdUsersUserIdEmail
+      tags:
+      - users
+      summary: Change a user's e-mail
+      x-coverage: client
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TopazeUserEmail'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkUnmodelled'
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/systems/{systemId}/users/{userId}:
+    parameters:
+    - $ref: '#/components/parameters/SystemId'
+    - $ref: '#/components/parameters/UserId'
+    - $ref: '#/components/parameters/SessionId'
+    delete:
+      operationId: deleteV1SystemsSystemIdUsersUserId
+      tags:
+      - users
+      summary: Delete a user
+      x-coverage: client
+      responses:
+        '200':
+          $ref: '#/components/responses/OkUnmodelled'
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/systems/{systemId}/owner:
+    parameters:
+    - $ref: '#/components/parameters/SystemId'
+    - $ref: '#/components/parameters/SessionId'
+    put:
+      operationId: putV1SystemsSystemIdOwner
+      tags:
+      - users
+      summary: Change the owner's details
+      x-coverage: client
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TopazeUpdateOwnerUser'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkUnmodelled'
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/systems/{systemId}/restricted:
+    parameters:
+    - $ref: '#/components/parameters/SystemId'
+    - $ref: '#/components/parameters/SessionId'
+    put:
+      operationId: putV1SystemsSystemIdRestricted
+      tags:
+      - users
+      summary: Change a restricted user's name
+      x-coverage: client
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TopazeUpdateRestrictedUser'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkUnmodelled'
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/systems/{systemId}/installer:
+    parameters:
+    - $ref: '#/components/parameters/SystemId'
+    - $ref: '#/components/parameters/SessionId'
+    put:
+      operationId: putV1SystemsSystemIdInstaller
+      tags:
+      - users
+      summary: Change the installer
+      x-coverage: client
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangeInstallerRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkUnmodelled'
+        default:
+          $ref: '#/components/responses/Error'
+  /v6/systems/{systemId}/users/{userId}/accessCodes:
+    parameters:
+    - $ref: '#/components/parameters/SystemId'
+    - $ref: '#/components/parameters/UserId'
+    - $ref: '#/components/parameters/SessionId'
+    put:
+      operationId: putV6SystemsSystemIdUsersUserIdAccessCodes
+      tags:
+      - users
+      summary: Change a user's code
+      x-coverage: client
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TopazeUserAccessCodes'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkUnmodelled'
+        default:
+          $ref: '#/components/responses/Error'
+  /v6/systems/{systemId}/users/{userId}/rights:
+    parameters:
+    - $ref: '#/components/parameters/SystemId'
+    - $ref: '#/components/parameters/UserId'
+    - $ref: '#/components/parameters/SessionId'
+    put:
+      operationId: putV6SystemsSystemIdUsersUserIdRights
+      tags:
+      - users
+      summary: Change a user's rights
+      x-coverage: client
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TopazeRights'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkUnmodelled'
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/widgets/systems/{systemId}/users/{userId}:
+    parameters:
+    - $ref: '#/components/parameters/SystemId'
+    - $ref: '#/components/parameters/UserId'
+    - $ref: '#/components/parameters/SessionId'
+    get:
+      operationId: getV1WidgetsSystemsSystemIdUsersUserId
+      tags:
+      - misc
+      summary: Home screen widgets (presets, groups...)
+      description: pydaitem reads it to discover the partial arming presets.
+      x-coverage: facade
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TopazeWidgetResponse'
+        default:
+          $ref: '#/components/responses/Error'
+      x-observed: true
+      x-observed-notes: Maps each widget item to its groups; the item `id` is the preset index.
+    post:
+      operationId: postV1WidgetsSystemsSystemIdUsersUserId
+      tags:
+      - misc
+      summary: Save the widget layout
+      x-coverage: client
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TopazeWidgetRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkUnmodelled'
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/widgets/{widgetId}/systems/{systemId}/users/{userId}:
+    parameters:
+    - name: widgetId
+      in: path
+      required: true
+      schema:
+        type: string
+    - $ref: '#/components/parameters/SystemId'
+    - $ref: '#/components/parameters/UserId'
+    - $ref: '#/components/parameters/SessionId'
+    post:
+      operationId: postV1WidgetsWidgetIdSystemsSystemIdUsersUserId
+      tags:
+      - misc
+      summary: Save one widget
+      x-coverage: client
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TopazeWidget'
+      responses:
+        '200':
+          $ref: '#/components/responses/OkUnmodelled'
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/systems/{systemId}/users/{userId}/isFavoritesMigrationPopupShown:
+    parameters:
+    - $ref: '#/components/parameters/SystemId'
+    - $ref: '#/components/parameters/UserId'
+    - $ref: '#/components/parameters/SessionId'
+    get:
+      operationId: getV1SystemsSystemIdUsersUserIdIsFavoritesMigrationPopupShown
+      tags:
+      - misc
+      summary: Whether to show the favourites pop-up
+      x-coverage: client
+      responses:
+        '200':
+          $ref: '#/components/responses/OkUnmodelled'
+        default:
+          $ref: '#/components/responses/Error'
+  /v1/systems/{systemId}/users/{userId}/hideFavoritesMigrationPopup:
+    parameters:
+    - $ref: '#/components/parameters/SystemId'
+    - $ref: '#/components/parameters/UserId'
+    - $ref: '#/components/parameters/SessionId'
+    post:
+      operationId: postV1SystemsSystemIdUsersUserIdHideFavoritesMigrationPopup
+      tags:
+      - misc
+      summary: Hide that pop-up
+      x-coverage: client
+      responses:
+        '200':
+          $ref: '#/components/responses/OkUnmodelled'
+        default:
+          $ref: '#/components/responses/Error'
+  /v5/upsell/{lang}:
+    parameters:
+    - name: lang
+      in: path
+      required: true
+      schema:
+        type: string
+    - $ref: '#/components/parameters/SessionId'
+    - $ref: '#/components/parameters/AppPlatform'
+    - $ref: '#/components/parameters/AppVersion'
+    get:
+      operationId: getV5UpsellLang
+      tags:
+      - misc
+      summary: Marketing message
+      x-coverage: client
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TopazeUpsellResponse'
+        default:
+          $ref: '#/components/responses/Error'
+  /v6/users/{userId}/feedback:
+    parameters:
+    - $ref: '#/components/parameters/UserId'
+    - $ref: '#/components/parameters/SessionId'
+    post:
+      operationId: postV6UsersUserIdFeedback
+      tags:
+      - misc
+      summary: Send feedback
+      x-coverage: client
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TopazeFeedbackRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TopazeFeedbackResponse'
+        default:
+          $ref: '#/components/responses/Error'
+components:
+  parameters:
+    SessionId:
+      name: X-SessionId
+      in: header
+      required: false
+      description: The panel session id (ttmSessionId from connect). Declared on every operation.
+      schema:
+        type: string
+    Vendor:
+      name: X-Vendor
+      in: header
+      required: true
+      description: 'Brand: daitem here. Declared on user info, logout, connect and push registration.'
+      schema:
+        $ref: '#/components/schemas/XVendor'
+    ForwardedFor:
+      name: X-Forwarded-For
+      in: header
+      required: true
+      description: Client address. Declared on connect and on camera captures.
+      schema:
+        type: string
+    AppVersion:
+      name: X-App-Version
+      in: header
+      required: true
+      description: The app version. Required by connect, free-form.
+      schema:
+        type: string
+    AppPlatform:
+      name: X-App-Platform
+      in: header
+      required: true
+      description: The platform. Optional.
+      schema:
+        type: string
+    SystemId:
+      in: path
+      name: systemId
+      required: true
+      schema:
+        type: integer
+    UserId:
+      in: path
+      name: userId
+      required: true
+      schema:
+        type: integer
+    ScenarioId:
+      in: path
+      name: scenarioId
+      required: true
+      schema:
+        type: integer
+    TransactionId:
+      in: path
+      name: transactionId
+      required: true
+      schema:
+        type: string
+  securitySchemes:
+    keycloak:
+      type: oauth2
+      description: Keycloak realm daitem, client daitem-secure-app, PKCE S256, redirect URI daitemsecure://auth.
+      flows:
+        authorizationCode:
+          authorizationUrl: https://auth.atraltech.com/realms/daitem/protocol/openid-connect/auth
+          tokenUrl: https://auth.atraltech.com/realms/daitem/protocol/openid-connect/token
+          scopes:
+            openid: OpenID Connect
+    appName:
+      type: apiKey
+      in: header
+      name: X-App-Name
+      description: Always eNova.
+  responses:
+    Error:
+      description: Business error. `message` is one of the codes listed in TopazeExceptionMessage.message,
+        explained in docs/api/reference.md.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/TopazeExceptionMessage'
+    SessionBusy:
+      description: Another device already holds the panel session. `details` names the holder. The panel
+        allows a single session across all accounts, so this is expected whenever the mobile app is open;
+        retry later.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/TopazeExceptionMessage'
+          examples:
+            ownerHoldsSession:
+              value:
+                message: transmitter.connection.sessionalreadyopen
+                details: 'owner '
+    NoSession:
+      description: No usable panel session. Both variants are remedied by calling `connect`.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/TopazeExceptionMessage'
+          examples:
+            noSession:
+              summary: No session at all
+              value:
+                message: status.nottmsessionid
+                details: Failed to get last TTM session
+            staleSession:
+              summary: A session exists but its id is stale
+              value:
+                message: transmitter.error.invalidsessionid
+                details: 'Invalid session id: <hex>'
+    Forbidden:
+      description: 'The account lacks rights for this resource. Known case: the logbook is owner-only.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/TopazeExceptionMessage'
+    OkUnmodelled:
+      description: OK (body not modelled)
+  schemas:
+    SsoAuthToken:
+      type: object
+      properties:
+        access_token:
+          type: string
+        refresh_token:
+          type: string
+        expires_in:
+          type: integer
+        refresh_expires_in:
+          type: integer
+        id_token:
+          type: string
+      required:
+      - access_token
+      - refresh_token
+      - expires_in
+      - refresh_expires_in
+    TopazeError:
+      type: object
+      properties:
+        message:
+          type: string
+        details:
+          type: string
+    TopazeSystemCode:
+      type: object
+      properties:
+        code:
+          type: string
+        codeSize:
+          type: integer
+      required:
+      - code
+    TopazeEdaitemConfiguration:
+      type: object
+      properties:
+        countries:
+          type: array
+          items:
+            type: string
+      required:
+      - countries
+    TopazeAutomatismListResponse:
+      type: object
+      properties:
+        automatisms:
+          type: array
+          items:
+            $ref: '#/components/schemas/TopazeAutomatism'
+    TopazeAutomatism:
+      type: object
+      properties:
+        id:
+          type: string
+        availableCommands:
+          type: array
+          items:
+            $ref: '#/components/schemas/TopazeSendCommandRequestType'
+        isCustomIconAllowed:
+          type: boolean
+        category:
+          $ref: '#/components/schemas/TopazeAutomatismCategory'
+        state:
+          $ref: '#/components/schemas/TopazeAutomatismState'
+        label:
+          type: string
+        mode:
+          $ref: '#/components/schemas/TopazeSendCommandRequestType'
+      required:
+      - id
+      - availableCommands
+      - category
+    TopazeAutomatismState:
+      type: object
+      properties:
+        state:
+          $ref: '#/components/schemas/TopazeAutomatismStateType'
+        position:
+          type: integer
+      required:
+      - state
+    TopazeModifyContact:
+      type: object
+      properties:
+        username:
+          type: string
+        email:
+          type: string
+      required:
+      - username
+      - email
+    TopazeCreateContact:
+      type: object
+      properties:
+        username:
+          type: string
+        email:
+          type: string
+        alertConfigurationMail:
+          $ref: '#/components/schemas/TopazeAlertConfigurationMail'
+      required:
+      - username
+      - email
+      - alertConfigurationMail
+    TopazeAlarmRightsConfiguration:
+      type: object
+      properties:
+        active:
+          type: boolean
+        groupRights:
+          type: array
+          items:
+            $ref: '#/components/schemas/TopazeGroupRightsConfiguration'
+    TopazeAlarms:
+      type: object
+      properties:
+        active:
+          type: boolean
+        groupRights:
+          type: array
+          items:
+            $ref: '#/components/schemas/TopazeModifyRestrictedUserGroupRight'
+      required:
+      - active
+      - groupRights
+    TopazeAlertConfigurationMail:
+      type: object
+      properties:
+        notificationsMailAnomaly:
+          type: boolean
+        notificationsMailIntrusion:
+          type: boolean
+    TopazeAlertConfigurationPush:
+      type: object
+      properties:
+        notificationsPushAnomaly:
+          type: boolean
+        notificationsPushIntrusion:
+          type: boolean
+        notificationsPushOnOff:
+          type: boolean
+    TopazeAsyncResponse:
+      type: object
+      properties:
+        error:
+          $ref: '#/components/schemas/TopazeExceptionMessage'
+        response: {}
+        status:
+          $ref: '#/components/schemas/AsyncStatus'
+    TopazeAsyncResponseConnectResult:
+      type: object
+      properties:
+        error:
+          $ref: '#/components/schemas/TopazeExceptionMessage'
+        response:
+          $ref: '#/components/schemas/TopazeConnectResult'
+        status:
+          $ref: '#/components/schemas/AsyncStatus'
+    TopazeAuthUserInfo:
+      type: object
+      properties:
+        userUid:
+          type: string
+        userId:
+          type: integer
+        username:
+          type: string
+        firstName:
+          type: string
+        lastName:
+          type: string
+    TopazeAutomatismRight:
+      type: object
+      properties:
+        active:
+          type: boolean
+      required:
+      - active
+    TopazeBox:
+      type: object
+      properties:
+        name:
+          type: string
+        serialNumber:
+          type: string
+        anomalies:
+          type: object
+          additionalProperties:
+            type: boolean
+        firmwareInfo:
+          $ref: '#/components/schemas/TopazeFirmwareInfo'
+      required:
+      - name
+      - serialNumber
+      - anomalies
+    TopazeCamera:
+      type: object
+      properties:
+        id:
+          type: integer
+        uid:
+          type: string
+        type:
+          $ref: '#/components/schemas/TopazeCameraType'
+        name:
+          type: string
+        model:
+          type: string
+        status:
+          type: string
+        dahuaCloudInfo:
+          $ref: '#/components/schemas/TopazeDahuaCloudInfo'
+        dahuaInfo:
+          $ref: '#/components/schemas/TopazeDahuaInfo'
+      required:
+      - id
+      - uid
+      - type
+      - name
+      - model
+    TopazeCameraListResponse:
+      type: object
+      properties:
+        cameras:
+          type: array
+          items:
+            $ref: '#/components/schemas/TopazeCamera'
+    TopazeCentral:
+      type: object
+      properties:
+        name:
+          type: string
+        type:
+          $ref: '#/components/schemas/CentralType'
+        serialNumber:
+          type: string
+        hasIO:
+          type: boolean
+        plug:
+          $ref: '#/components/schemas/TopazePlug'
+        anomalies:
+          type: object
+          additionalProperties:
+            type: boolean
+        firmwareInfo:
+          $ref: '#/components/schemas/TopazeFirmwareInfo'
+      required:
+      - name
+      - type
+      - serialNumber
+      - hasIO
+      - anomalies
+      - firmwareInfo
+    TopazeCommand:
+      type: object
+      properties:
+        index:
+          type: integer
+        name:
+          type: string
+        type:
+          $ref: '#/components/schemas/CommandType'
+        serialNumber:
+          type: string
+        isInhibitable:
+          type: boolean
+        isInhibited:
+          type: boolean
+        anomalies:
+          type: object
+          additionalProperties:
+            type: boolean
+      required:
+      - index
+      - name
+      - type
+      - serialNumber
+      - isInhibitable
+      - isInhibited
+      - anomalies
+    TopazeConfiguration:
+      type: object
+      properties:
+        isTlsEnabled:
+          type: boolean
+        isPushNotifWithTlsEnabled:
+          type: boolean
+        isAlertEnabled:
+          type: boolean
+        isScenarioEnabled:
+          type: boolean
+        central:
+          $ref: '#/components/schemas/TopazeCentral'
+        box:
+          $ref: '#/components/schemas/TopazeBox'
+        commands:
+          type: array
+          items:
+            $ref: '#/components/schemas/TopazeCommand'
+        genericSensors:
+          $ref: '#/components/schemas/TopazeGenericSensorsInformation'
+        sirens:
+          type: array
+          items:
+            $ref: '#/components/schemas/TopazeSiren'
+        transceivers:
+          type: array
+          items:
+            $ref: '#/components/schemas/TopazeTransceiver'
+        transmitters:
+          type: array
+          items:
+            $ref: '#/components/schemas/TopazeTransmitter'
+      required:
+      - isTlsEnabled
+      - isPushNotifWithTlsEnabled
+      - isAlertEnabled
+      - isScenarioEnabled
+      - central
+      - commands
+      - genericSensors
+      - sirens
+      - transceivers
+      - transmitters
+    TopazeConfigurationCamera:
+      type: object
+      properties:
+        anomalies:
+          type: object
+          additionalProperties:
+            type: boolean
+        deeplink:
+          type: string
+        group:
+          type: integer
+        id:
+          type: integer
+        index:
+          type: integer
+        installationDate:
+          type: number
+        name:
+          type: string
+        refCode:
+          type: string
+        uid:
+          type: string
+        type:
+          type: string
+      required:
+      - index
+      - uid
+    TopazeConfigurationData:
+      type: object
+      properties:
+        centralId:
+          type: string
+        id:
+          type: integer
+        installationComplete:
+          type: boolean
+        name:
+          type: string
+        gprsPhone:
+          type: string
+        rights:
+          type: object
+          additionalProperties:
+            type: string
+        role:
+          type: integer
+        standalone:
+          type: boolean
+        transmitterId:
+          type: string
+    TopazeConnectCredentials:
+      type: object
+      properties:
+        masterCode:
+          type: string
+    TopazeConnectResult:
+      type: object
+      properties:
+        codeIndex:
+          type: integer
+        connectedUserType:
+          $ref: '#/components/schemas/TopazeConnectedUserType'
+        gprsConnection:
+          type: boolean
+        groupList:
+          type: array
+          items:
+            $ref: '#/components/schemas/TopazeGroup'
+        groups:
+          type: array
+          items:
+            type: integer
+        message:
+          type: string
+        status:
+          type: string
+        systemState:
+          type: string
+          description: Raw panel state, as in TopazeSystemStateResult.systemState.
+          x-known-values:
+          - 'off'
+          - tempo
+          - tempogroup
+          - tempo1
+          - tempo2
+          - 'on'
+          - group
+          - partial1
+          - partial2
+          - presence
+          - apprent
+          - essai
+          - ''
+        ttmSessionId:
+          type: string
+        userRightsConfiguration:
+          $ref: '#/components/schemas/TopazeUserRightsConfiguration'
+        versions:
+          $ref: '#/components/schemas/TopazeConnectResultVersion'
+    TopazeConnectResultVersion:
+      type: object
+      properties:
+        box:
+          type: string
+        boxRadio:
+          type: string
+        plugKnx:
+          type: string
+        rawVersions:
+          type: string
+    TopazeContactIdentity:
+      type: object
+      properties:
+        contactId:
+          type: integer
+        email:
+          type: string
+        userName:
+          type: string
+    TopazeCreateRestrictedUserRequest:
+      type: object
+      properties:
+        code:
+          type: string
+        serviceCodeIndex:
+          type: integer
+        email:
+          type: string
+        firstName:
+          type: string
+        lastName:
+          type: string
+        rights:
+          $ref: '#/components/schemas/TopazeRestrictedUserRightsConfiguration'
+    TopazeCurrentFirmware:
+      type: object
+      properties:
+        releaseVersion:
+          type: string
+      required:
+      - releaseVersion
+    TopazeDahuaCloudInfo:
+      type: object
+      properties:
+        playInfo:
+          type: string
+        channelId:
+          type: string
+      required:
+      - playInfo
+      - channelId
+    TopazeDahuaInfo:
+      type: object
+      properties:
+        index:
+          type: integer
+        deeplink:
+          type: string
+      required:
+      - index
+      - deeplink
+    TopazeDeviceFirmware:
+      type: object
+      properties:
+        firmwareType:
+          $ref: '#/components/schemas/FirmwareKind'
+        currentVersion:
+          $ref: '#/components/schemas/TopazeCurrentFirmware'
+        latestVersion:
+          $ref: '#/components/schemas/TopazeFirmwareUpdate'
+      required:
+      - firmwareType
+      - currentVersion
+    TopazeDisconnect:
+      type: object
+      properties:
+        force:
+          type: boolean
+      required:
+      - force
+    TopazeDisconnectResult:
+      type: object
+      properties:
+        status:
+          $ref: '#/components/schemas/DisconnectStatus'
+    TopazeDisconnectTokens:
+      type: object
+      properties:
+        ttmSessionId:
+          type: string
+    TopazeExceptionMessage:
+      type: object
+      properties:
+        details:
+          type: string
+        message:
+          type: string
+          description: 'Error code the app knows. Meanings: docs/api/reference.md.'
+          x-known-values:
+          - transmitter.connection.sessionalreadyopen
+          - status.nottmsessionid
+          - transmitter.error.invalidsessionid
+          - unexpected.error
+          - transmitter.connection.badpincode
+          - transmitter.connection.overlimit
+          - transmitter.connection.sessionrestricted
+          - transmitter.connection.error
+          - transmitter.connection.videolocked
+          - transmitter.error.accessforbidden
+          - transmitter.error.ttdisconnected
+          - system.state.bad.module.version
+          - zone.code.desynchronization
+          - zone.code.wrong.size
+          - zone.code.restricted.already.exists
+          - zone.code.owner.already.exists
+          - error.user.code.installer
+          - error.central.servicecode.duplicated
+          - error.central.servicecode.forbidden
+          - installer.userCreation.error
+          - response.error.isalreadyowner
+          - response.error.isalreadyrestricted
+          - error.userUpdate.emailAlreadyExists
+          - error.scenario.noaction
+          - error.owner.notmigrated
+          - error.user.notfound
+          - error.connect.mydiagralusernotfound
+          - sso.response.error
+          - error.pool.full
+    TopazeFeedbackRequest:
+      type: object
+      properties:
+        message:
+          type: string
+      required:
+      - message
+    TopazeFeedbackResponse:
+      type: object
+      properties:
+        creationDate:
+          type: string
+          format: date-time
+        userId:
+          type: integer
+        message:
+          type: string
+      required:
+      - creationDate
+      - userId
+      - message
+    TopazeFilmDetails:
+      type: object
+      properties:
+        durationMs:
+          type: integer
+        format:
+          $ref: '#/components/schemas/TopazeFormat'
+        id:
+          type: string
+        carir:
+          type: string
+        timestamp:
+          type: integer
+        type:
+          $ref: '#/components/schemas/FilmType'
+        category:
+          $ref: '#/components/schemas/TopazeCategory'
+        deviceUid:
+          type: string
+    TopazeFireTrigger:
+      type: object
+      properties:
+        index:
+          type: integer
+        name:
+          type: string
+        serialNumber:
+          type: string
+        isTriggered:
+          type: boolean
+        anomalies:
+          type: object
+          additionalProperties:
+            type: boolean
+      required:
+      - index
+      - name
+      - serialNumber
+      - isTriggered
+      - anomalies
+    TopazeFirmwareInfo:
+      type: object
+      properties:
+        firmwares:
+          type: array
+          items:
+            $ref: '#/components/schemas/TopazeDeviceFirmware'
+      required:
+      - firmwares
+    TopazeFirmwareUpdate:
+      type: object
+      properties:
+        fileName:
+          type: string
+        isCritical:
+          type: boolean
+        releaseDate:
+          type: integer
+        releaseNote:
+          type: string
+        releaseVersion:
+          type: string
+      required:
+      - fileName
+      - isCritical
+      - releaseDate
+      - releaseVersion
+    TopazeFirmwareUpdateRequest:
+      type: object
+      properties:
+        firmwareFileName:
+          type: string
+        serialNumber:
+          type: string
+      required:
+      - firmwareFileName
+      - serialNumber
+    TopazeFirmwareUpdateStatusResponse:
+      type: object
+      properties:
+        status:
+          $ref: '#/components/schemas/TopazeFirmwareUpdateStatus'
+      required:
+      - status
+    TopazeGenericSensorsInformation:
+      type: object
+      properties:
+        sensors:
+          type: array
+          items:
+            $ref: '#/components/schemas/TopazeSensor'
+        fireTriggers:
+          type: array
+          items:
+            $ref: '#/components/schemas/TopazeFireTrigger'
+        ppmsTriggers:
+          type: array
+          items:
+            $ref: '#/components/schemas/TopazePpmsTrigger'
+      required:
+      - sensors
+      - fireTriggers
+      - ppmsTriggers
+    TopazeGetConfigurationInput:
+      type: object
+      properties:
+        role:
+          type: integer
+        systemId:
+          type: integer
+    TopazeGroup:
+      type: object
+      properties:
+        id:
+          type: integer
+        index:
+          type: integer
+        inputDelay:
+          type: integer
+        name:
+          type: string
+        outputDelay:
+          type: integer
+        active:
+          type: boolean
+    TopazeGroupRightsConfiguration:
+      type: object
+      properties:
+        index:
+          type: integer
+        active:
+          type: boolean
+    TopazeIsConnectedInput:
+      type: object
+      properties:
+        transmitterId:
+          type: string
+    TopazeIsConnectedOutput:
+      type: object
+      properties:
+        isConnected:
+          type: boolean
+    TopazeIsDeviceRegisterResponse:
+      type: object
+      properties:
+        isRegistered:
+          type: boolean
+    TopazeIsDeviceRegisteredBySystemRequest:
+      type: object
+      properties:
+        deviceId:
+          type: string
+    TopazeLogbookResponse:
+      type: object
+      properties:
+        response:
+          type: array
+          items:
+            $ref: '#/components/schemas/TopazeLog'
+        status:
+          $ref: '#/components/schemas/LogbookStatus'
+    TopazeLog:
+      type: object
+      properties:
+        date:
+          type: string
+          format: date-time
+        details:
+          type: array
+          items:
+            $ref: '#/components/schemas/TopazeDetail'
+        filterable:
+          type: boolean
+        title:
+          type: string
+    TopazeDetail:
+      type: object
+      properties:
+        args:
+          type: array
+          items:
+            $ref: '#/components/schemas/TopazeArg'
+        message:
+          type: string
+    TopazeArg:
+      type: object
+      properties:
+        type:
+          type: string
+        value:
+          type: string
+    TopazeLogoutRequest:
+      type: object
+      properties:
+        idToken:
+          type: string
+        id_token:
+          type: string
+    TopazeModifyRestrictedUserGroupRight:
+      type: object
+      properties:
+        index:
+          type: integer
+        active:
+          type: boolean
+      required:
+      - index
+      - active
+    TopazeModifySystemName:
+      type: object
+      properties:
+        name:
+          type: string
+      required:
+      - name
+    TopazeNotificationReceiver:
+      type: object
+      properties:
+        alertConfigurationMail:
+          $ref: '#/components/schemas/TopazeAlertConfigurationMail'
+        alertConfigurationPush:
+          $ref: '#/components/schemas/TopazeAlertConfigurationPush'
+        contactIdentity:
+          $ref: '#/components/schemas/TopazeContactIdentity'
+        userIdentity:
+          $ref: '#/components/schemas/TopazeUserIdentity'
+        userType:
+          $ref: '#/components/schemas/TopazeUserType'
+    TopazeOnOffProgram:
+      type: object
+      properties:
+        command:
+          type: boolean
+        day:
+          $ref: '#/components/schemas/TopazeDay'
+        groups:
+          type: array
+          items:
+            type: integer
+        hour:
+          type: integer
+        id:
+          type: integer
+        minute:
+          type: integer
+      required:
+      - command
+      - day
+      - groups
+      - hour
+      - id
+      - minute
+    TopazeOwnerUserConfiguration:
+      type: object
+      properties:
+        address:
+          type: string
+        city:
+          type: string
+        country:
+          type: string
+        email:
+          type: string
+        firstName:
+          type: string
+        lastName:
+          type: string
+        phone:
+          type: string
+        userId:
+          type: integer
+        zipCode:
+          type: string
+        codeId:
+          type: string
+    TopazePlug:
+      type: object
+      properties:
+        serialNumber:
+          type: string
+        firmwareInfo:
+          $ref: '#/components/schemas/TopazeFirmwareInfo'
+      required:
+      - serialNumber
+      - firmwareInfo
+    TopazePpmsTrigger:
+      type: object
+      properties:
+        index:
+          type: integer
+        name:
+          type: string
+        serialNumber:
+          type: string
+        anomalies:
+          type: object
+          additionalProperties:
+            type: boolean
+        type:
+          $ref: '#/components/schemas/PpmsTriggerType'
+        isTriggered:
+          type: boolean
+      required:
+      - index
+      - name
+      - serialNumber
+      - anomalies
+      - type
+      - isTriggered
+    TopazeProduct:
+      type: object
+      properties:
+        firmwares:
+          type: object
+          additionalProperties:
+            type: string
+        name:
+          type: string
+        serial:
+          type: string
+        vendor:
+          type: string
+    TopazeProductFirmwareUpdateRequest:
+      type: object
+      properties:
+        serialNumber:
+          type: string
+        firmwareType:
+          $ref: '#/components/schemas/FirmwareType'
+        firmwareVersion:
+          type: string
+      required:
+      - serialNumber
+      - firmwareType
+      - firmwareVersion
+    TopazeRegisterBySystemRequest:
+      type: object
+      properties:
+        deviceId:
+          type: string
+        lang:
+          type: string
+        userAgent:
+          type: string
+    TopazeRestrictedUserConfiguration:
+      type: object
+      properties:
+        email:
+          type: string
+        firstName:
+          type: string
+        lastName:
+          type: string
+        rights:
+          $ref: '#/components/schemas/TopazeRestrictedUserRightsConfiguration'
+        userId:
+          type: integer
+        codeId:
+          type: string
+    TopazeRestrictedUserRightsConfiguration:
+      type: object
+      properties:
+        alarms:
+          $ref: '#/components/schemas/TopazeAlarmRightsConfiguration'
+        automatism:
+          $ref: '#/components/schemas/TopazeRightConfiguration'
+        lights:
+          $ref: '#/components/schemas/TopazeRightConfiguration'
+        receivers:
+          $ref: '#/components/schemas/TopazeRightConfiguration'
+        scenarios:
+          $ref: '#/components/schemas/TopazeRightConfiguration'
+        videos:
+          $ref: '#/components/schemas/TopazeRightConfiguration'
+    TopazeResult:
+      type: object
+      properties:
+        message:
+          type: string
+    TopazeRightConfiguration:
+      type: object
+      properties:
+        active:
+          type: boolean
+    TopazeRights:
+      type: object
+      properties:
+        alarms:
+          $ref: '#/components/schemas/TopazeAlarms'
+        automatism:
+          $ref: '#/components/schemas/TopazeAutomatismRight'
+        lights:
+          $ref: '#/components/schemas/TopazeAutomatismRight'
+        receivers:
+          $ref: '#/components/schemas/TopazeAutomatismRight'
+        scenarios:
+          $ref: '#/components/schemas/TopazeAutomatismRight'
+        videos:
+          $ref: '#/components/schemas/TopazeAutomatismRight'
+      required:
+      - alarms
+      - automatism
+      - lights
+      - receivers
+      - scenarios
+      - videos
+    TopazeScenario:
+      type: object
+      properties:
+        id:
+          type: integer
+        actions:
+          type: array
+          items:
+            $ref: '#/components/schemas/TopazeAction'
+        active:
+          type: boolean
+        name:
+          type: string
+        triggerType:
+          type: string
+      required:
+      - id
+      - actions
+      - active
+      - name
+      - triggerType
+    TopazeAction:
+      type: object
+      properties:
+        command:
+          $ref: '#/components/schemas/TopazeScenarioCommand'
+        rank:
+          type: integer
+        type:
+          type: string
+        value:
+          type: string
+        typeId:
+          type: string
+        label:
+          type: string
+      required:
+      - command
+      - rank
+      - type
+    TopazeNewScenario:
+      type: object
+      properties:
+        actions:
+          type: array
+          items:
+            $ref: '#/components/schemas/TopazeAction'
+        active:
+          type: boolean
+        name:
+          type: string
+        triggerType:
+          type: string
+      required:
+      - actions
+      - active
+      - triggerType
+    TopazeTemplateScenario:
+      type: object
+      properties:
+        actions:
+          type: array
+          items:
+            $ref: '#/components/schemas/TopazeAction'
+        active:
+          type: boolean
+        name:
+          type: string
+        triggerType:
+          type: string
+      required:
+      - actions
+      - active
+      - name
+      - triggerType
+    TopazeScenarioCommand:
+      type: object
+      properties:
+        id:
+          type: string
+        isAlertLauncher:
+          type: boolean
+      required:
+      - id
+      - isAlertLauncher
+    TopazeScenarioActionOutput:
+      type: object
+      properties:
+        actionCode:
+          $ref: '#/components/schemas/TopazeActionCode'
+        actionType:
+          $ref: '#/components/schemas/TopazeActionType'
+        children:
+          type: array
+          items:
+            $ref: '#/components/schemas/TopazeScenarioActionOutput'
+        defaultChoice:
+          type: boolean
+        deviceApplication:
+          $ref: '#/components/schemas/TopazeDeviceApplication'
+        exclusive:
+          type: boolean
+        index:
+          type: integer
+        name:
+          type: string
+    TopazeScenarioAvailableActionListResponse:
+      type: object
+      properties:
+        actions:
+          type: array
+          items:
+            $ref: '#/components/schemas/TopazeAvailableAction'
+    TopazeAvailableAction:
+      type: object
+      properties:
+        commands:
+          type: array
+          items:
+            $ref: '#/components/schemas/TopazeScenarioCommand'
+        label:
+          type: string
+        type:
+          type: string
+        typeID:
+          type: string
+      required:
+      - commands
+      - type
+    TopazeScenarioConfiguration:
+      type: object
+      properties:
+        delay:
+          $ref: '#/components/schemas/TopazeDelayConfiguration'
+        triggers:
+          type: array
+          items:
+            $ref: '#/components/schemas/TopazeTriggerConfiguration'
+      required:
+      - delay
+      - triggers
+    TopazeDelayConfiguration:
+      type: object
+      properties:
+        intervalSeconds:
+          type: integer
+        maxSeconds:
+          type: integer
+        minSeconds:
+          type: integer
+      required:
+      - intervalSeconds
+      - maxSeconds
+      - minSeconds
+    TopazeTriggerConfiguration:
+      type: object
+      properties:
+        maxNumber:
+          type: integer
+        name:
+          type: string
+        type:
+          type: string
+      required:
+      - maxNumber
+      - name
+      - type
+    TopazeScenarioListResponse:
+      type: object
+      properties:
+        scenarios:
+          type: array
+          items:
+            $ref: '#/components/schemas/TopazeScenario'
+    TopazeScheduleActivationRequest:
+      type: object
+      properties:
+        activate:
+          type: boolean
+    TopazeSendAutomationCommandRequest:
+      type: object
+      properties:
+        command:
+          type: string
+        id:
+          type: integer
+      required:
+      - command
+      - id
+    TopazeSendGroupCommandRequest:
+      type: object
+      properties:
+        groups:
+          type: array
+          items:
+            $ref: '#/components/schemas/TopazeGroupeCommandRequest'
+      required:
+      - groups
+    TopazeGroupeCommandRequest:
+      type: object
+      properties:
+        id:
+          type: integer
+        active:
+          type: boolean
+      required:
+      - id
+      - active
+    TopazeSendPpmsCommandRequest:
+      type: object
+      properties:
+        type:
+          $ref: '#/components/schemas/TopazeSendPpmsCommandRequestType'
+        status:
+          $ref: '#/components/schemas/TopazeSendPpmsCommandRequestStatus'
+      required:
+      - type
+      - status
+    TopazeSendSystemActivationCommandRequest:
+      type: object
+      properties:
+        active:
+          type: boolean
+      required:
+      - active
+    TopazeSensor:
+      type: object
+      properties:
+        index:
+          type: integer
+        name:
+          type: string
+        type:
+          $ref: '#/components/schemas/SensorType'
+        group:
+          type: integer
+        serialNumber:
+          type: string
+        isVideo:
+          type: boolean
+        isInhibitable:
+          type: boolean
+        isInhibited:
+          type: boolean
+        anomalies:
+          type: object
+          additionalProperties:
+            type: boolean
+        firmwareInfo:
+          $ref: '#/components/schemas/TopazeFirmwareInfo'
+      required:
+      - index
+      - name
+      - type
+      - serialNumber
+      - isVideo
+      - isInhibitable
+      - isInhibited
+      - anomalies
+    TopazeSiren:
+      type: object
+      properties:
+        index:
+          type: integer
+        name:
+          type: string
+        type:
+          $ref: '#/components/schemas/SirenType'
+        serialNumber:
+          type: string
+        isInhibitable:
+          type: boolean
+        isInhibited:
+          type: boolean
+        anomalies:
+          type: object
+          additionalProperties:
+            type: boolean
+      required:
+      - index
+      - name
+      - type
+      - serialNumber
+      - isInhibitable
+      - isInhibited
+      - anomalies
+    TopazeStatus:
+      type: object
+      properties:
+        message:
+          type: string
+        result:
+          type: boolean
+    TopazeSystem:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        vendor:
+          type: string
+        role:
+          type: integer
+    TopazeSystemScheduleConfiguration:
+      type: object
+      properties:
+        globalActivation:
+          type: boolean
+        maxProgramCount:
+          type: integer
+        programs:
+          type: array
+          items:
+            $ref: '#/components/schemas/TopazeOnOffProgram'
+    TopazeSystemStateResult:
+      type: object
+      properties:
+        commandStatus:
+          type: string
+          description: Outcome of the command. Anything but CMD_OK means the panel refused or did not
+            answer.
+          x-known-values:
+          - CMD_OK
+          - CMD TIMEOUT
+          - UNKNOWN CMD
+          - ERROR CMD FORBIDDEN
+        defaults:
+          type: string
+        groups:
+          type: array
+          items:
+            $ref: '#/components/schemas/TopazeGroup'
+        message:
+          type: string
+        systemState:
+          type: string
+          description: 'Raw panel state. Meanings: docs/api/entities.md#panel-states. The value while
+            the alarm sounds is unknown.'
+          x-known-values:
+          - 'off'
+          - tempo
+          - tempogroup
+          - tempo1
+          - tempo2
+          - 'on'
+          - group
+          - partial1
+          - partial2
+          - presence
+          - apprent
+          - essai
+          - ''
+          x-exit-delay-values:
+          - tempo
+          - tempogroup
+          - tempo1
+          - tempo2
+          x-preset-sequences:
+          - - tempo1
+            - partial1
+          - - tempo2
+            - partial2
+          x-app-names:
+            'off': 'off'
+            tempo: delayOn
+            tempogroup: delayOnGroup
+            tempo1: delayPartial1
+            tempo2: delayPartial2
+            'on': 'on'
+            group: onGroup
+            partial1: onPartial1
+            partial2: onPartial2
+            presence: onPresence
+            apprent: modeInstallation
+            essai: modeTest
+            ? ''
+            : unknown
+        openedIssueNumbers:
+          type: array
+          items:
+            type: integer
+    TopazeTemplateScenarioListResponse:
+      type: object
+      properties:
+        scenarios:
+          type: array
+          items:
+            $ref: '#/components/schemas/TopazeTemplateScenario'
+    TopazeTokens:
+      type: object
+      properties:
+        ttmSessionId:
+          type: string
+    TopazeTransceiver:
+      type: object
+      properties:
+        index:
+          type: integer
+        name:
+          type: string
+        type:
+          $ref: '#/components/schemas/TransceiverType'
+        serialNumber:
+          type: string
+        isInhibitable:
+          type: boolean
+        isInhibited:
+          type: boolean
+        anomalies:
+          type: object
+          additionalProperties:
+            type: boolean
+      required:
+      - index
+      - name
+      - type
+      - serialNumber
+      - isInhibitable
+      - isInhibited
+      - anomalies
+    TopazeTransmitter:
+      type: object
+      properties:
+        index:
+          type: integer
+        name:
+          type: string
+        type:
+          $ref: '#/components/schemas/TransmitterType'
+        serialNumber:
+          type: string
+        isInhibitable:
+          type: boolean
+        isInhibited:
+          type: boolean
+        anomalies:
+          type: object
+          additionalProperties:
+            type: boolean
+        firmwareInfo:
+          $ref: '#/components/schemas/TopazeFirmwareInfo'
+        plug:
+          $ref: '#/components/schemas/TopazePlug'
+      required:
+      - index
+      - name
+      - type
+      - serialNumber
+      - isInhibitable
+      - isInhibited
+      - anomalies
+    TopazeUnRegisterDeviceBySystemRequest:
+      type: object
+      properties:
+        deviceId:
+          type: string
+    TopazeUpdateGPRSPhoneRequest:
+      type: object
+      properties:
+        phoneNumber:
+          type: string
+      required:
+      - phoneNumber
+    TopazeUpdateOwnerUser:
+      type: object
+      properties:
+        firstName:
+          type: string
+        lastName:
+          type: string
+        address:
+          type: string
+        zipCode:
+          type: string
+        city:
+          type: string
+        country:
+          type: string
+        phone:
+          type: string
+      required:
+      - firstName
+      - lastName
+      - country
+    TopazeUpdateProductRequest:
+      type: object
+      properties:
+        isInhibited:
+          type: boolean
+      required:
+      - isInhibited
+    TopazeUpdateRestrictedUser:
+      type: object
+      properties:
+        firstName:
+          type: string
+        lastName:
+          type: string
+      required:
+      - firstName
+      - lastName
+    TopazeUpsellResponse:
+      type: object
+      properties:
+        upsell:
+          $ref: '#/components/schemas/TopazeUpsell'
+    TopazeUpsell:
+      type: object
+      properties:
+        id:
+          type: integer
+        message:
+          type: string
+        textButton:
+          type: string
+        title:
+          type: string
+        url:
+          type: string
+      required:
+      - id
+      - message
+    TopazeUser:
+      type: object
+      properties:
+        email:
+          type: string
+        userId:
+          type: integer
+    TopazeUserAccessCodes:
+      type: object
+      properties:
+        code:
+          type: string
+      required:
+      - code
+    TopazeUserEmail:
+      type: object
+      properties:
+        email:
+          type: string
+      required:
+      - email
+    TopazeUserIdentity:
+      type: object
+      properties:
+        email:
+          type: string
+        firstName:
+          type: string
+        lastName:
+          type: string
+        userId:
+          type: integer
+    TopazeInstaller:
+      type: object
+      properties:
+        email:
+          type: string
+        firstName:
+          type: string
+        lastName:
+          type: string
+        phone:
+          type: string
+        codeId:
+          type: string
+        userID:
+          type: integer
+    TopazeServiceCodeUserConfiguration:
+      type: object
+      properties:
+        index:
+          type: integer
+        codeId:
+          type: string
+      required:
+      - codeId
+    TopazeUserConfiguration:
+      type: object
+      properties:
+        maxSecondaryUsers:
+          type: integer
+        codeLength:
+          type: integer
+        restrictedCodeLength:
+          type: integer
+    TopazeUserListConfigurationResponse:
+      type: object
+      properties:
+        owner:
+          $ref: '#/components/schemas/TopazeOwnerUserConfiguration'
+        restrictedUsers:
+          type: array
+          items:
+            $ref: '#/components/schemas/TopazeRestrictedUserConfiguration'
+        installer:
+          $ref: '#/components/schemas/TopazeInstaller'
+        serviceCodes:
+          type: array
+          items:
+            $ref: '#/components/schemas/TopazeServiceCodeUserConfiguration'
+        userConfiguration:
+          $ref: '#/components/schemas/TopazeUserConfiguration'
+    TopazeUserRightsConfiguration:
+      type: object
+      properties:
+        alarms:
+          $ref: '#/components/schemas/TopazeAlarmRightsConfiguration'
+        automatism:
+          $ref: '#/components/schemas/TopazeRightConfiguration'
+        lights:
+          $ref: '#/components/schemas/TopazeRightConfiguration'
+        receivers:
+          $ref: '#/components/schemas/TopazeRightConfiguration'
+        scenarios:
+          $ref: '#/components/schemas/TopazeRightConfiguration'
+        videos:
+          $ref: '#/components/schemas/TopazeRightConfiguration'
+    TopazeVideoList:
+      type: object
+      properties:
+        index:
+          type: integer
+        videos:
+          type: array
+          items:
+            $ref: '#/components/schemas/TopazeFilmDetails'
+    TopazeVideoListResponse:
+      type: object
+      properties:
+        videos:
+          type: array
+          items:
+            $ref: '#/components/schemas/TopazeFilmDetails'
+    TopazeWidget:
+      type: object
+      properties:
+        id:
+          type: integer
+        isVisible:
+          type: boolean
+        title:
+          type: string
+        widgetType:
+          type: string
+        widgetItems:
+          type: array
+          items:
+            $ref: '#/components/schemas/TopazeWidgetItem'
+      required:
+      - id
+    TopazeWidgetResponse:
+      type: object
+      properties:
+        widgets:
+          type: array
+          items:
+            $ref: '#/components/schemas/TopazeWidget'
+    TopazeWidgetRequest:
+      type: object
+      properties:
+        widgets:
+          type: array
+          items:
+            $ref: '#/components/schemas/TopazeWidget'
+      required:
+      - widgets
+    TopazeWidgetItem:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        customName:
+          type: string
+        iconType:
+          type: string
+        groups:
+          type: array
+          items:
+            type: integer
+        isVisible:
+          type: boolean
+        type:
+          type: string
+      required:
+      - id
+    SendCommandRequest:
+      type: object
+      properties:
+        type:
+          $ref: '#/components/schemas/TopazeSendCommandRequestType'
+        position:
+          type: integer
+      required:
+      - type
+    ChangeInstallerRequest:
+      type: object
+      properties:
+        email:
+          type: string
+      required:
+      - email
+    AsyncStatus:
+      type: string
+      enum:
+      - PENDING
+      - DONE
+      - ERROR
+      - NOT_FOUND
+      - TIMEOUT
+    LogbookStatus:
+      type: string
+      enum:
+      - PENDING
+      - DONE
+      - ERROR
+      - NOT_FOUND
+      - TIMEOUT
+    DisconnectStatus:
+      type: string
+      enum:
+      - OK
+      - KO
+    TopazeFirmwareUpdateStatus:
+      type: string
+      enum:
+      - PENDING
+      - OK
+      - KO
+    FirmwareKind:
+      type: string
+      enum:
+      - SOFT
+      - RADIO
+      - VIDEO
+      - DEVICE
+      - KNX
+      - UNKNOWN
+    FirmwareType:
+      type: string
+      enum:
+      - SOFT
+      - RADIO
+      - VIDEO
+      - DEVICE
+      - KNX
+    FilmType:
+      type: string
+      enum:
+      - ALARM
+      - ONDEMAND
+    TopazeFormat:
+      type: string
+      enum:
+      - MPEG4
+      - JPEG
+    TopazeCategory:
+      type: string
+      enum:
+      - DETECTOR
+      - CAMERA
+      - ARCHIVE
+    TopazeCameraType:
+      type: string
+      enum:
+      - DAHUA
+      - DAHUA_CLOUD
+      - DAITEM_CLOUD
+      - UNKNOWN
+    TopazeConnectedUserType:
+      type: string
+      enum:
+      - OWNER
+      - INSTALLER
+      - RESTRICTED
+    TopazeUserType:
+      type: string
+      enum:
+      - OWNER
+      - RESTRICTED
+      - CONTACT
+    TopazeDay:
+      type: string
+      enum:
+      - monday
+      - tuesday
+      - wednesday
+      - thursday
+      - friday
+      - saturday
+      - sunday
+    CentralType:
+      type: string
+      enum:
+      - DEFAULT
+      - INTRUSION
+      - TECHNICAL
+    CommandType:
+      type: string
+      enum:
+      - DEFAULT
+      - REMOTE
+      - KEYBOARD
+      - CALL_BUTTON
+      - EMERGENCY_CALL_BUTTON
+    SensorType:
+      type: string
+      enum:
+      - DEFAULT
+      - OPENING_DETECTOR
+      - MOTION_DETECTOR
+      - MOTION_DETECTOR_WITH_IMAGE_CAPTURE
+      - INFRARED_DETECTOR
+    SirenType:
+      type: string
+      enum:
+      - DEFAULT
+    TransceiverType:
+      type: string
+      enum:
+      - DEFAULT
+    TransmitterType:
+      type: string
+      enum:
+      - DEFAULT
+    PpmsTriggerType:
+      type: string
+      enum:
+      - ATTACK
+      - NATURAL_HAZARD
+    TopazeSendPpmsCommandRequestType:
+      type: string
+      enum:
+      - ATTACK
+      - NATURAL_HAZARD
+    TopazeSendPpmsCommandRequestStatus:
+      type: string
+      enum:
+      - 'ON'
+      - 'OFF'
+    TopazeAutomatismCategory:
+      type: string
+      enum:
+      - GARAGE
+      - GATE
+      - LIGHT
+      - PLUG
+      - SHUTTER
+      - UNKNOW
+    TopazeAutomatismStateType:
+      type: string
+      enum:
+      - 'ON'
+      - 'OFF'
+      - POSITION
+    TopazeSendCommandRequestType:
+      type: string
+      enum:
+      - 'ON'
+      - 'OFF'
+      - TIMER
+      - SWITCH
+      - PULSE
+      - POSITION
+      - STEP_UP
+      - STEP_DOWN
+      - UP
+      - DOWN
+      - STOP
+    TopazeActionCode:
+      type: string
+      enum:
+      - STOP
+      - START
+      - PRESENCE
+      - ALERT
+      - SILENT_ALERT
+      - FIRE_ALERT
+      - CARIR_RECORD
+      - FILM_RECORD
+      - OPEN_UP
+      - CLOSE_DOWN
+      - GATE_STOP
+      - OFF_UP
+      - ON_DOWN
+      - TIMER
+      - PULSE
+      - UNDEFINED
+    TopazeActionType:
+      type: string
+      enum:
+      - ALARM
+      - ADYX
+      - KNX
+      - DELAY
+      - UNDEFINED
+    TopazeDeviceApplication:
+      type: string
+      enum:
+      - SHUTTER
+      - PLUG
+      - LIGHT
+      - ALARM
+      - GARAGE_DOOR
+      - PORTAL
+    InstallerAccess:
+      type: string
+      enum:
+      - FORBIDDEN
+      - TEST_ONLY
+      - USE_ON_SYSTEM_STOPPED
+      - TOTAL
+      description: App cases forbidden, testMode, usageMode, all.
+    SwitchModeCommand:
+      type: string
+      enum:
+      - INSTALLATION
+      - TEST
+      - UTILISATION
+      description: App cases install, test, usage.
+    XVendor:
+      type: string
+      enum:
+      - daitem
+      - hager
+      - hagerservices
+      - diagral
+      - edaitem
+      - logisty
+    XAppName:
+      type: string
+      enum:
+      - eNova
+      - atralSecure
+      - diagralSecure
+      - logistySecure
+      description: The app sends eNova; the others are sister apps sharing the client.
+    UpsellLang:
+      type: string
+      enum:
+      - en
+      - de
+      - fr
+      - nl
+      - it
+      - es

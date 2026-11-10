@@ -10,7 +10,9 @@ conflict-free to embed anywhere, and a CLI convenience must not cost users that.
     pydaitem devices
     pydaitem presets
     pydaitem schedule list
-    pydaitem arm --mode away --yes
+    pydaitem arm --mode away --yes --wait
+    pydaitem disarm --groups 2 --yes
+    pydaitem scenario run 4 --yes
 
 Exit codes let a caller branch without parsing text. `SESSION_BUSY` in particular is not a
 failure: it is the normal outcome when someone has the mobile app open, and an automation
@@ -18,7 +20,8 @@ should retry rather than alert.
 
 Split by responsibility across this package: `parser` (the argparse tree and its input
 validators), `output` (the shared `--json`/text formatting and the confirmation prompt),
-`commands` (systems/status/devices/presets/arm/disarm), `schedule` (the schedule
+`commands` (systems/status/devices/modes/presets/arm/disarm), `extras` (automations,
+scenarios, cameras, clips, the event log and the dump), `schedule` (the schedule
 subcommands), and `app` (dispatch and `main()`, which ties the others together).
 """
 

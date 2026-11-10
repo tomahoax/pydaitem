@@ -7,7 +7,15 @@ import hashlib
 
 import pytest
 
-from pydaitem import VERSION, DaitemClient, DaitemError, PanelState, SystemStatus
+from pydaitem import (
+    VERSION,
+    DaitemClient,
+    DaitemError,
+    DeviceKind,
+    Fault,
+    PanelState,
+    SystemStatus,
+)
 from pydaitem.client.pkce import _FORM_ACTION_RE, _pkce_pair, _query_param
 from pydaitem.client.transport import app_headers
 from pydaitem.models import Inventory
@@ -103,6 +111,65 @@ def test_inventory_parses_devices_and_anomalies() -> None:
     assert inventory.sensors[0].group == 1
     # The API exposes no open/closed state, so the model must not invent one.
     assert not hasattr(inventory.sensors[0], "is_open")
+
+
+def test_inventory_reads_every_device_family() -> None:
+    """Shapes from the app's models: these sections came back empty on every live read."""
+
+    def device(name: str, **extra: object) -> dict[str, object]:
+        return {"index": 1, "name": name, "serialNumber": f"SN-{name}", "anomalies": {}, **extra}
+
+    inventory = Inventory.from_json(
+        {
+            "isAlertEnabled": True,
+            "isScenarioEnabled": False,
+            "central": {},
+            "genericSensors": {
+                "sensors": [device("door")],
+                "fireTriggers": [device("fire", isTriggered=True)],
+                "ppmsTriggers": [device("ppms", isTriggered=False, type="PPMS")],
+            },
+            "commands": [device("remote")],
+            "sirens": [device("siren", anomalies={"powerSupplyAlert": True})],
+            "transmitters": [
+                device(
+                    "gsm",
+                    firmwareInfo={
+                        "firmwares": [
+                            {"firmwareType": "SOFT", "currentVersion": {"releaseVersion": "2.1"}}
+                        ]
+                    },
+                )
+            ],
+            "transceivers": [device("relay")],
+            "box": {"name": "box", "serialNumber": "SN-box", "anomalies": {"radioAlert": True}},
+        }
+    )
+    assert [(d.kind, d.name) for d in inventory.devices] == [
+        (DeviceKind.SENSOR, "door"),
+        (DeviceKind.COMMAND, "remote"),
+        (DeviceKind.SIREN, "siren"),
+        (DeviceKind.TRANSMITTER, "gsm"),
+        (DeviceKind.TRANSCEIVER, "relay"),
+        (DeviceKind.BOX, "box"),
+        (DeviceKind.FIRE_TRIGGER, "fire"),
+        (DeviceKind.PPMS_TRIGGER, "ppms"),
+    ]
+    (siren,) = inventory.of_kind(DeviceKind.SIREN)
+    assert siren.anomalies.faults == {Fault.BATTERY}
+    assert inventory.of_kind(DeviceKind.BOX)[0].anomalies.faults == {Fault.RADIO}
+    assert inventory.of_kind(DeviceKind.TRANSMITTER)[0].firmwares[0].version == "2.1"
+    assert [d.triggered for d in inventory.devices if d.triggered is not None] == [True, False]
+    assert inventory.alerts_enabled is True and inventory.scenarios_enabled is False
+
+
+def test_inventory_tolerates_absent_or_odd_sections() -> None:
+    """The live answer sends `box: null` and empty lists: no device, no crash."""
+    inventory = Inventory.from_json(
+        {"central": {}, "box": None, "sirens": "?", "genericSensors": [], "commands": None}
+    )
+    assert inventory.devices == []
+    assert inventory.alerts_enabled is None and inventory.scenarios_enabled is None
 
 
 def test_inventory_parses_the_three_firmware_versions() -> None:
@@ -217,3 +284,16 @@ async def test_get_job_rejects_a_path_not_shaped_like_a_logbook_job() -> None:
                 await client.logbook.get_job(bad_path)
     finally:
         await client.close()
+
+
+def test_enum_values_follow_their_names_unless_the_api_spells_them_otherwise() -> None:
+    """`auto()` sends the name as is (devices) or in lower case (semantics)."""
+    from pydaitem import AutomatismCategory, AutomatismCommand, ClipKind
+
+    assert AutomatismCommand.STEP_UP == "STEP_UP"
+    assert AutomatismCategory.GATE == "GATE"
+    assert AutomatismCategory.UNKNOWN == "UNKNOW"
+    assert ClipKind.ON_DEMAND == "ONDEMAND"
+    assert Fault.MAIN_POWER == "main_power"
+    assert PanelState.ARMED_PARTIAL_2 == "armed_partial_2"
+    assert DeviceKind.FIRE_TRIGGER == "fire_trigger"

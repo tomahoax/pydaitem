@@ -2,8 +2,9 @@
 
 Grouped by theme: `wire` (endpoints and protocol timings), `semantics` (the raw API
 vocabulary, this library's own semantic vocabulary, and the mapping between them), `errors`
-(business error messages used to type exceptions). Package identity and versioning live
-here directly, since `pyproject.toml` reads `VERSION` from this file by regex.
+(business error messages and command statuses used to type exceptions), `devices`
+(automations, cameras and clips). Package identity and
+versioning live here directly, since `pyproject.toml` reads `VERSION` from this file by regex.
 """
 
 from __future__ import annotations
@@ -13,12 +14,26 @@ from importlib.metadata import version as _package_version
 from platform import python_version
 from typing import Final
 
-from .errors import NO_SESSION_DETAIL, ServerMessage
+from .devices import (
+    AutomatismCategory,
+    AutomatismCommand,
+    AutomatismStateType,
+    CameraType,
+    ClipCategory,
+    ClipFormat,
+    ClipKind,
+    InstallerAccess,
+    PanelMode,
+    PpmsAlert,
+)
+from .errors import NO_SESSION_DETAIL, CommandStatus, ServerMessage
 from .semantics import (
     ARMED_PANEL_STATES,
+    PRESET_ITEM_NAMES,
     RAW_TO_FAULT,
     RAW_TO_PANEL_STATE,
     ArmMode,
+    DeviceKind,
     Fault,
     PanelState,
     SystemState,
@@ -31,6 +46,8 @@ from .wire import (
     CLIENT_ID,
     REALM,
     REDIRECT_URI,
+    RETRY_DELAY,
+    RETRY_LIMIT,
 )
 
 
@@ -43,7 +60,7 @@ def _dependency_version(package: str) -> str:
 
 #: Single source of truth for the version: pyproject reads it from here, so the packaged
 #: metadata and the value sent as X-App-Version can never drift apart.
-VERSION: Final = "0.2.0"
+VERSION: Final = "0.3.0b1"
 PROJECT_URL: Final = "https://github.com/tomahoax/pydaitem"
 
 #: Required on every call, and the value must be `eNova`: without it the Azure gateway
@@ -75,16 +92,31 @@ __all__ = [
     "AUTH_BASE",
     "CLIENT_ID",
     "NO_SESSION_DETAIL",
+    "PRESET_ITEM_NAMES",
     "PROJECT_URL",
     "RAW_TO_FAULT",
     "RAW_TO_PANEL_STATE",
     "REALM",
     "REDIRECT_URI",
+    "RETRY_DELAY",
+    "RETRY_LIMIT",
     "USER_AGENT",
     "VERSION",
     "ArmMode",
+    "AutomatismCategory",
+    "AutomatismCommand",
+    "AutomatismStateType",
+    "CameraType",
+    "ClipCategory",
+    "ClipFormat",
+    "ClipKind",
+    "CommandStatus",
+    "DeviceKind",
     "Fault",
+    "InstallerAccess",
+    "PanelMode",
     "PanelState",
+    "PpmsAlert",
     "ServerMessage",
     "SystemState",
 ]

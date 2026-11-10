@@ -1,54 +1,33 @@
-"""Smoke test of pydaitem against the live API.
+"""Smoke test of pydaitem against the live API, run by a maintainer before a release.
 
-The async client is a full port of the reference sync client: unit tests cover neither
-the authentication flow (cookies, redirect, form encoding) nor the transport. This script
-fills that gap by exercising the real sequence.
+The unit tests never call the API. This script replays the real sequence: Keycloak
+sign-in, system list, state, inventory, then an arm and disarm cycle.
 
-Not shipped: the `scripts/` folder is excluded from the PyPI package.
+Not shipped: the `scripts/` folder is left out of the PyPI package. It needs the library
+installed, for instance with `pip install -e .`.
 
-WARNING: without `--dry-run` this ARMS then DISARMS a real alarm. Disarming is guaranteed
+WARNING: without `--dry-run` this ARMS then DISARMS a real alarm. Disarming is attempted
 on exit, even on error.
 
 Usage:
-    python scripts/smoke.py --env-file ../daitem-api-research/client/.env --dry-run
-    python scripts/smoke.py --env-file ../daitem-api-research/client/.env
+    python scripts/smoke.py --env-file ~/.daitem.env --dry-run
+    python scripts/smoke.py --env-file ~/.daitem.env
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
-import os
-import sys
 import time
 from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from pydaitem import (
     DaitemClient,
     DaitemNoSessionError,
     DaitemSessionBusyError,
     DaitemSystem,
+    resolve_credentials,
 )
-
-
-def load_env(path: Path) -> None:
-    if not path.exists():
-        return
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
-
-
-def require(name: str) -> str:
-    value = os.environ.get(name)
-    if not value:
-        sys.exit(f"Missing variable: {name}")
-    return value
 
 
 def log(step: str, message: str) -> None:
@@ -57,27 +36,24 @@ def log(step: str, message: str) -> None:
 
 async def main() -> int:
     parser = argparse.ArgumentParser(description="pydaitem smoke test")
-    parser.add_argument("--env-file", type=Path, default=Path(__file__).parent.parent / ".env")
+    parser.add_argument("--env-file", type=Path, help="KEY=VALUE file holding credentials")
     parser.add_argument("--dry-run", action="store_true", help="skip every arming command")
     args = parser.parse_args()
 
-    load_env(args.env_file)
-    email = require("DAITEM_EMAIL")
-    password = require("DAITEM_PASSWORD")
-    master_code = require("DAITEM_MASTER_CODE")
+    creds = resolve_credentials(env_file=args.env_file)
 
     started = time.monotonic()
-    async with DaitemClient(email, password) as client:
-        # 1. Authentication: the most fragile part of the port.
-        log("auth", f"signing in as {email}…")
+    async with DaitemClient(creds.email, creds.password) as client:
+        # 1. Authentication, which the unit tests only cover against a fake server.
+        log("auth", f"signing in as {creds.email}...")
         await client.login()
         user = await client.account.get_user()
-        log("auth", f"OK — {user.get('firstName')} {user.get('lastName')}")
+        log("auth", f"OK, {user.get('firstName')} {user.get('lastName')}")
 
         # 2. Systems.
         systems = await client.account.list_systems()
-        log("systems", ", ".join(f"{s.id} « {s.name} » role={s.role}" for s in systems))
-        system = DaitemSystem(client, systems[0].id, master_code)
+        log("systems", ", ".join(f'{s.id} "{s.name}" role={s.role}' for s in systems))
+        system = DaitemSystem(client, creds.system_id or systems[0].id, creds.code)
         log("modes", f"supported arming modes: {sorted(await system.capabilities.arm_modes())}")
 
         # 3. Opportunistic read: tells whether a session already exists.
@@ -89,11 +65,11 @@ async def main() -> int:
             log("session", "no session open, the client will open its own")
             session_held_by_other = False
 
-        status = await system.read_status()
+        status = await system.panel.read()
         log("state", f"panel_state={status.panel_state} groups={status.active_groups}")
 
         # 4. Inventory.
-        inventory = await system.read_inventory()
+        inventory = await system.inventory.read()
         anomalies = sorted(f.value for f in inventory.central_anomalies.faults)
         log(
             "inventory",
@@ -114,21 +90,16 @@ async def main() -> int:
 
 
 async def run_command_cycle(system: DaitemSystem) -> None:
-    """Arm then disarm through the façade, with disarming guaranteed even on error."""
+    """Arm then disarm through the façade, with disarming attempted even on error."""
     try:
-        log("command", "ARMING (all groups)…")
+        log("command", "ARMING (all groups)...")
         status = await system.commands.arm_away()
         log("command", f"immediate response: {status.panel_state}")
 
-        # The façade releases the session between calls, so we simply re-read.
-        for _ in range(30):
-            await asyncio.sleep(2)
-            status = await system.read_status()
-            if not status.is_arming:
-                break
+        status = await system.panel.wait_settled(timeout=60)
         log("command", f"settled state: {status.panel_state}")
 
-        log("command", "DISARMING…")
+        log("command", "DISARMING...")
         status = await system.commands.disarm()
         log("command", f"state: {status.panel_state}")
     except DaitemSessionBusyError as exc:
@@ -138,13 +109,13 @@ async def run_command_cycle(system: DaitemSystem) -> None:
         # DaitemError: an unexpected bug is exactly when the net matters most, and a
         # narrow except once let a crash leave the alarm armed.
         try:
-            final = await system.read_status()
+            final = await system.panel.read()
             if final.is_armed or final.is_arming:
-                log("cleanup", f"state {final.panel_state}, safety disarm…")
+                log("cleanup", f"state {final.panel_state}, safety disarm...")
                 final = await system.commands.disarm()
             log("cleanup", f"final state: {final.panel_state}")
         except Exception as exc:
-            log("cleanup", f"SAFETY DISARM FAILED ({exc}) - CHECK THE ALARM MANUALLY")
+            log("cleanup", f"SAFETY DISARM FAILED ({exc}), CHECK THE ALARM MANUALLY")
 
 
 if __name__ == "__main__":

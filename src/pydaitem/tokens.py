@@ -20,14 +20,12 @@ import asyncio
 import json
 import logging
 import os
-import tempfile
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
-_LOGGER = logging.getLogger(__name__)
+from ._files import write_private
 
-#: Owner read/write only. The refresh token is a credential at rest.
-_FILE_MODE = 0o600
+_LOGGER = logging.getLogger(__name__)
 
 
 @runtime_checkable
@@ -44,11 +42,17 @@ class TokenStore(Protocol):
 class FileTokenStore:
     """Store the refresh token in a JSON file, for scripts and command line tools.
 
-    Does real disk I/O, so it belongs outside an event loop that forbids blocking calls.
+    The disk I/O runs in a worker thread, so it does not block the event loop.
+
+    With `account`, the file records which account the token belongs to, and a file saved
+    for another account (or before accounts were recorded) is ignored: resuming it would
+    drive that other account's alarm. A file owned by another user is ignored too, and one
+    readable by others is used with a warning.
     """
 
-    def __init__(self, path: Path | str) -> None:
+    def __init__(self, path: Path | str, *, account: str | None = None) -> None:
         self._path = Path(path).expanduser()
+        self._account = account.casefold() if account else None
 
     async def load(self) -> str | None:
         return await asyncio.to_thread(self._load)
@@ -58,6 +62,8 @@ class FileTokenStore:
 
     def _load(self) -> str | None:
         try:
+            if not self._trusted():
+                return None
             data = json.loads(self._path.read_text(encoding="utf-8"))
         except FileNotFoundError:
             return None
@@ -65,28 +71,40 @@ class FileTokenStore:
             # A damaged store must not break authentication: fall back to a full login.
             _LOGGER.warning("Ignoring unreadable token store %s: %s", self._path, err)
             return None
+        if not isinstance(data, dict):
+            _LOGGER.warning("Ignoring token store %s: not a JSON object", self._path)
+            return None
+        if self._account is not None and data.get("account") != self._account:
+            _LOGGER.info("Ignoring token store %s: saved for another account", self._path)
+            return None
         token = data.get("refresh_token")
         return token if isinstance(token, str) and token else None
 
+    def _trusted(self) -> bool:
+        """Whether the file may be used: it must belong to the current user."""
+        info = self._path.stat()
+        if hasattr(os, "getuid") and info.st_uid != os.getuid():
+            _LOGGER.warning("Ignoring token store %s: owned by another user", self._path)
+            return False
+        if info.st_mode & 0o077:
+            _LOGGER.warning("Token store %s is readable by other users", self._path)
+        return True
+
     def _save(self, refresh_token: str | None) -> None:
         if refresh_token is None:
-            self._path.unlink(missing_ok=True)
+            try:
+                self._path.unlink(missing_ok=True)
+            except OSError as err:
+                _LOGGER.warning("Could not delete the token store %s: %s", self._path, err)
             return
 
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        payload = json.dumps({"refresh_token": refresh_token}, indent=2) + "\n"
-
-        # Write to a temporary file then rename, so an interrupted write never leaves a
-        # truncated store behind. The mode is set before the content is written.
-        fd, tmp_name = tempfile.mkstemp(dir=self._path.parent, prefix=".token-")
-        tmp = Path(tmp_name)
+        content: dict[str, str] = {"refresh_token": refresh_token}
+        if self._account is not None:
+            content["account"] = self._account
+        payload = json.dumps(content, indent=2) + "\n"
         try:
-            os.fchmod(fd, _FILE_MODE)
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                handle.write(payload)
-            tmp.replace(self._path)
+            write_private(self._path, payload)
         except OSError as err:
-            tmp.unlink(missing_ok=True)
             _LOGGER.warning("Could not persist the refresh token to %s: %s", self._path, err)
 
 

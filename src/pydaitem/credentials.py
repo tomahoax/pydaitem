@@ -9,11 +9,14 @@ file.
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
 
 from .exceptions import MissingCredentials
+
+_LOGGER = logging.getLogger(__name__)
 
 ENV_EMAIL = "DAITEM_EMAIL"
 ENV_PASSWORD = "DAITEM_PASSWORD"
@@ -21,7 +24,7 @@ ENV_CODE = "DAITEM_MASTER_CODE"
 ENV_SYSTEM_ID = "DAITEM_SYSTEM_ID"
 
 
-@dataclass(slots=True)
+@dataclass(slots=True, kw_only=True)
 class Credentials:
     """Everything needed to drive one installation."""
 
@@ -37,17 +40,33 @@ class Credentials:
 
 
 def read_env_file(path: Path | str) -> dict[str, str]:
-    """Parse a simple KEY=VALUE file. Missing file yields an empty mapping."""
+    """Parse a simple KEY=VALUE file. Missing file yields an empty mapping.
+
+    Blank lines and `#` comments are skipped, an `export ` prefix is accepted, and one pair
+    of matching quotes around a value is removed, no more: a password may start or end with
+    a quote character.
+    """
     values: dict[str, str] = {}
     file = Path(path).expanduser()
     if not file.exists():
         return values
-    for line in file.read_text(encoding="utf-8").splitlines():
+    try:
+        text = file.read_text(encoding="utf-8")
+        if file.stat().st_mode & 0o077:
+            _LOGGER.warning("The env file %s is readable by other users: chmod 600 it", file)
+    except (OSError, UnicodeDecodeError) as err:
+        raise MissingCredentials(f"Cannot read the env file {file}: {err}") from err
+    for line in text.splitlines():
         line = line.strip()
+        if line.startswith("export "):
+            line = line[len("export ") :].lstrip()
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, _, value = line.partition("=")
-        values[key.strip()] = value.strip().strip('"').strip("'")
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        values[key.strip()] = value
     return values
 
 
@@ -88,11 +107,16 @@ def resolve_credentials(
     raw_system = system_id or pick(None, ENV_SYSTEM_ID)
     assert resolved_email and resolved_password and resolved_code  # narrowed above
 
+    try:
+        resolved_system = int(raw_system) if raw_system else None
+    except ValueError as err:
+        raise MissingCredentials(f"{ENV_SYSTEM_ID} must be a number, got {raw_system!r}") from err
+
     return Credentials(
         email=resolved_email,
         password=resolved_password,
         code=resolved_code,
-        system_id=int(raw_system) if raw_system else None,
+        system_id=resolved_system,
     )
 
 

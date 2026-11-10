@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
@@ -8,14 +8,14 @@ dynamic = ["version"]
 description = "Unofficial async client for the Daitem Secure API (Atral Topaze platform)"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{ name = "Yannick Olympio" }]
 keywords = ["daitem", "atral", "topaze", "alarm", "home-assistant", "home-automation"]
 classifiers = [
-  "Development Status :: 3 - Alpha",
+  "Development Status :: 4 - Beta",
   "Framework :: AsyncIO",
   "Intended Audience :: Developers",
-  "License :: OSI Approved :: MIT License",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
@@ -33,7 +33,12 @@ classifiers = [
 # body-size denial of service) was briefly used to justify raising this floor to 3.13.4;
 # none of them apply here, since they are all `aiohttp.web` (server-side) issues and this
 # client never runs a production server, only a local one in its own test suite.
-dependencies = ["aiohttp>=3.9"]
+#
+# 3.10.7 is the oldest release the whole test suite passes on with current dependencies.
+# 3.9.0 turns an elapsed timeout into `CancelledError`, which escapes `DaitemError`, and the
+# test server of releases before 3.10.7 rejects hosts with a port under recent yarl. The CI
+# job `oldest-aiohttp` installs exactly this floor, so it stays true.
+dependencies = ["aiohttp>=3.10.7"]
 
 [project.optional-dependencies]
 # HTTP tests use aiohttp's built-in test server rather than a mocking library: the real
@@ -44,6 +49,9 @@ dev = [
   "pytest-asyncio>=0.24",
   "ruff>=0.6",
   "mypy>=1.11",
+  # The API spec tests read docs/api/openapi.yaml. Development only: the library itself
+  # still depends on aiohttp alone.
+  "pyyaml>=6.0",
 ]
 
 # Command line entry point. Deliberately built on argparse: the single-dependency
@@ -62,12 +70,12 @@ path = "src/pydaitem/const/__init__.py"
 pattern = 'VERSION: Final = "(?P<version>[^"]+)"'
 
 [tool.hatch.build.targets.wheel]
+# Ships py.typed with the package, so consumers see the annotations (PEP 561).
 packages = ["src/pydaitem"]
-# Ships py.typed so consumers actually see the annotations (PEP 561).
-artifacts = ["src/pydaitem/py.typed"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 
 [tool.ruff]

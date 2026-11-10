@@ -1,0 +1,39 @@
+name: Consumer
+
+# Runs the Home Assistant integration's tests against this branch of the library, so a change
+# that breaks its main consumer shows up here, before a release, rather than at its next
+# upgrade. Not a required check: the integration may lag a release behind on purpose, and a
+# red run then lists what its migration has to cover.
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+jobs:
+  ha-daitem:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: pydaitem
+
+      - uses: actions/checkout@v7
+        with:
+          repository: tomahoax/ha-daitem
+          path: ha-daitem
+
+      - uses: actions/setup-python@v7
+        with:
+          # The integration's own floor (requires-python in its pyproject.toml).
+          python-version: "3.14"
+
+      - name: Install the integration's test dependencies, then this library over them
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r ha-daitem/requirements_dev.txt
+          pip install ./pydaitem
+          python -c "import pydaitem; print('pydaitem', pydaitem.__version__)"
+
+      - name: Integration tests
+        working-directory: ha-daitem
+        run: python -m pytest -q

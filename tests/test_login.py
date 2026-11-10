@@ -15,7 +15,7 @@ from pydaitem.const import REALM
 
 AUTH_PATH = f"/realms/{REALM}/protocol/openid-connect/auth"
 TOKEN_PATH = f"/realms/{REALM}/protocol/openid-connect/token"
-FORM_PATH = "/login-actions/authenticate"
+FORM_PATH = f"/realms/{REALM}/login-actions/authenticate"
 
 
 async def token(_request: web.Request) -> web.Response:
